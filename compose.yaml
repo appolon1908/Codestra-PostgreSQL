@@ -1,0 +1,94 @@
+name: codestra-postgresql
+services:
+  postgres:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/admin_password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --auth-local=peer
+    command: [postgres, -c, config_file=/etc/postgresql/postgresql.conf]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - pgsocket:/var/run/postgresql
+      - ./config/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./config/pg_hba.dev.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./init:/docker-entrypoint-initdb.d:ro
+    secrets: [admin_password, monitor_password, exporter_password]
+    networks: [database]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    security_opt: [no-new-privileges:true]
+    shm_size: 256mb
+    restart: unless-stopped
+  management:
+    build: .
+    environment:
+      PGHOST: postgres
+      PGDATABASE: postgres
+      PGUSER: codestra_monitor
+      PGPASSWORD_FILE: /run/secrets/monitor_password
+    secrets: [monitor_password]
+    ports: ["127.0.0.1:${MANAGEMENT_PORT:-8080}:8080"]
+    networks: [database, management]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    healthcheck:
+      test: [CMD, python3, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+  exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+    environment:
+      DATA_SOURCE_URI: postgres:5432/postgres?sslmode=disable
+      DATA_SOURCE_USER: codestra_exporter
+      DATA_SOURCE_PASS_FILE: /run/secrets/exporter_password
+    secrets: [exporter_password]
+    networks: [database]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+  tools:
+    profiles: [tools]
+    build: .
+    environment:
+      PGHOST: /var/run/postgresql
+      PGUSER: postgres
+      PGDATABASE: postgres
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      - pgsocket:/var/run/postgresql
+      - backups:/backups
+    network_mode: none
+    read_only: true
+    tmpfs: [/tmp:mode=1777]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command: [scripts/backup.py, --help]
+networks:
+  management: {}
+  database:
+    internal: true
+volumes:
+  pgdata:
+  pgsocket:
+  backups:
+secrets:
+  admin_password:
+    file: ${OPENBAO_RENDER_DIR:-./.secrets}/admin_password
+  monitor_password:
+    file: ${OPENBAO_RENDER_DIR:-./.secrets}/monitor_password
+  exporter_password:
+    file: ${OPENBAO_RENDER_DIR:-./.secrets}/exporter_password

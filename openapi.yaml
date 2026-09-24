@@ -1,33 +1,241 @@
 openapi: 3.1.0
 info:
-  title: Codestra PostgreSQL API
-  version: 0.1.0
-  description: Standalone Codestra service. Cross-system access is mediated by Middleware V3.
+  title: Codestra PostgreSQL Management API
+  version: 1.0.0
+  description: Read-only runtime boundary. Internal use only; cross-system access
+    via Caddy/Kong/Middleware V3. No application records or mutation endpoints. Network
+    isolation is mandatory; this dev API has no application authentication.
 servers:
-  - url: http://localhost
+- url: http://localhost:8080
 paths:
   /healthz:
     get:
       operationId: health
       responses:
-        "200":
-          description: Healthy
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - status
+                additionalProperties: false
+                properties:
+                  status:
+                    const: ok
   /readyz:
     get:
       operationId: ready
       responses:
-        "200":
-          description: Ready
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - status
+                - database
+                additionalProperties: false
+                properties:
+                  status:
+                    enum:
+                    - ready
+                    - unavailable
+                  database:
+                    type: object
+                    required:
+                    - reachable
+                    additionalProperties: false
+                    properties:
+                      reachable:
+                        type: boolean
+                      version_num:
+                        type: integer
+                        minimum: 1
+                      in_recovery:
+                        type: boolean
+                      max_connections:
+                        type: integer
+                        minimum: 1
+                    allOf:
+                    - if:
+                        properties:
+                          reachable:
+                            const: true
+                      then:
+                        required:
+                        - version_num
+                        - in_recovery
+                        - max_connections
+        '503':
+          description: PostgreSQL unreachable or not version 17
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - status
+                - database
+                additionalProperties: false
+                properties:
+                  status:
+                    enum:
+                    - ready
+                    - unavailable
+                  database:
+                    type: object
+                    required:
+                    - reachable
+                    additionalProperties: false
+                    properties:
+                      reachable:
+                        type: boolean
+                      version_num:
+                        type: integer
+                        minimum: 1
+                      in_recovery:
+                        type: boolean
+                      max_connections:
+                        type: integer
+                        minimum: 1
+                    allOf:
+                    - if:
+                        properties:
+                          reachable:
+                            const: true
+                      then:
+                        required:
+                        - version_num
+                        - in_recovery
+                        - max_connections
+  /metrics:
+    get:
+      operationId: metrics
+      responses:
+        '200':
+          description: Success
+          content:
+            text/plain:
+              schema:
+                type: string
   /v1/capabilities:
     get:
       operationId: capabilities
       responses:
-        "200":
-          description: Service capabilities
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - service
+                - api_version
+                - capabilities
+                - mutations
+                - integration_authority
+                additionalProperties: false
+                properties:
+                  service:
+                    const: codestra-postgresql
+                  api_version:
+                    const: '1'
+                  capabilities:
+                    type: array
+                    items:
+                      enum:
+                      - runtime.status
+                      - runtime.health
+                      - runtime.metrics
+                  mutations:
+                    const: false
+                  integration_authority:
+                    const: Middleware V3
   /v1/postgresql/status:
     get:
-      operationId: serviceStatus
+      operationId: postgresqlStatus
       responses:
-        "200":
-          description: Service-local status
-components: {}
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - status
+                - database
+                additionalProperties: false
+                properties:
+                  status:
+                    enum:
+                    - ready
+                    - unavailable
+                  database:
+                    type: object
+                    required:
+                    - reachable
+                    additionalProperties: false
+                    properties:
+                      reachable:
+                        type: boolean
+                      version_num:
+                        type: integer
+                        minimum: 1
+                      in_recovery:
+                        type: boolean
+                      max_connections:
+                        type: integer
+                        minimum: 1
+                    allOf:
+                    - if:
+                        properties:
+                          reachable:
+                            const: true
+                      then:
+                        required:
+                        - version_num
+                        - in_recovery
+                        - max_connections
+        '503':
+          description: PostgreSQL unreachable or not version 17
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - status
+                - database
+                additionalProperties: false
+                properties:
+                  status:
+                    enum:
+                    - ready
+                    - unavailable
+                  database:
+                    type: object
+                    required:
+                    - reachable
+                    additionalProperties: false
+                    properties:
+                      reachable:
+                        type: boolean
+                      version_num:
+                        type: integer
+                        minimum: 1
+                      in_recovery:
+                        type: boolean
+                      max_connections:
+                        type: integer
+                        minimum: 1
+                    allOf:
+                    - if:
+                        properties:
+                          reachable:
+                            const: true
+                      then:
+                        required:
+                        - version_num
+                        - in_recovery
+                        - max_connections
