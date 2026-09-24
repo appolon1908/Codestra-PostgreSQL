@@ -239,3 +239,90 @@ paths:
                         - version_num
                         - in_recovery
                         - max_connections
+  /health/ready:
+    get:
+      operationId: healthReadyAlias
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - status
+                - database
+                additionalProperties: false
+                properties:
+                  status:
+                    enum:
+                    - ready
+                    - unavailable
+                  database:
+                    type: object
+                    required:
+                    - reachable
+                    additionalProperties: false
+                    properties:
+                      reachable:
+                        type: boolean
+                      version_num:
+                        type: integer
+                        minimum: 1
+                      in_recovery:
+                        type: boolean
+                      max_connections:
+                        type: integer
+                        minimum: 1
+                    allOf:
+                    - if:
+                        properties:
+                          reachable:
+                            const: true
+                      then:
+                        required:
+                        - version_num
+                        - in_recovery
+                        - max_connections
+        '503':
+          description: PostgreSQL unreachable or not version 17
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - status
+                - database
+                additionalProperties: false
+                properties:
+                  status:
+                    enum:
+                    - ready
+                    - unavailable
+                  database:
+                    type: object
+                    required:
+                    - reachable
+                    additionalProperties: false
+                    properties:
+                      reachable:
+                        type: boolean
+                      version_num:
+                        type: integer
+                        minimum: 1
+                      in_recovery:
+                        type: boolean
+                      max_connections:
+                        type: integer
+                        minimum: 1
+                    allOf:
+                    - if:
+                        properties:
+                          reachable:
+                            const: true
+                      then:
+                        required:
+                        - version_num
+                        - in_recovery
+                        - max_connections
+      summary: Readiness alias for Middleware V3

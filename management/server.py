@@ -55,7 +55,7 @@ def response(path):
             },
             "application/json",
         )
-    if path in ("/readyz", "/v1/postgresql/status", "/metrics"):
+    if path in ("/readyz", "/health/ready", "/v1/postgresql/status", "/metrics"):
         database = probe()
         ready = database["reachable"] and 170000 <= database["version_num"] < 180000
         if path == "/metrics":

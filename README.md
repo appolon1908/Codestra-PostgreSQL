@@ -34,6 +34,7 @@ network without database TLS; apply the production policy before deployment.
 | --- | --- |
 | `GET /healthz` | API process alive; independent of PostgreSQL |
 | `GET /readyz` | Authenticated query succeeds against PostgreSQL 17; otherwise 503 |
+| `GET /health/ready` | Middleware V3 readiness alias for `/readyz` |
 | `GET /v1/postgresql/status` | Same readiness plus version, recovery state and connection limit |
 | `GET /v1/capabilities` | Read-only runtime capabilities and Middleware V3 authority |
 | `GET /metrics` | Prometheus readiness and management process uptime; 200 even during DB outage |
