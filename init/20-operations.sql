@@ -27,6 +27,55 @@ SELECT jsonb_build_object(
 );
 $$;
 
+CREATE OR REPLACE FUNCTION codestra_ops.pool_isolation() RETURNS jsonb
+LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+WITH pairs AS (
+ SELECT a.usename AS role_ref,
+        a.datname AS database_ref,
+        count(*)::int AS connected,
+        count(*) FILTER (WHERE a.state = 'active')::int AS active,
+        count(*) FILTER (WHERE a.state = 'idle in transaction')::int AS idle_in_transaction
+ FROM pg_stat_activity a
+ WHERE a.backend_type = 'client backend' AND a.usename IS NOT NULL AND a.datname IS NOT NULL
+ GROUP BY a.usename, a.datname
+), bounded_pairs AS (
+ SELECT * FROM pairs ORDER BY connected DESC, role_ref, database_ref LIMIT 64
+), spanning AS (
+ SELECT role_ref, count(*)::int AS database_count
+ FROM pairs GROUP BY role_ref HAVING count(*) > 1
+ ORDER BY database_count DESC, role_ref LIMIT 64
+), totals AS (
+ SELECT coalesce(sum(connected),0)::int AS connected,
+        coalesce(sum(active),0)::int AS active,
+        coalesce(sum(idle_in_transaction),0)::int AS idle_in_transaction
+ FROM pairs
+), limits AS (
+ SELECT current_setting('max_connections')::int AS max_connections,
+        current_setting('superuser_reserved_connections')::int
+          + current_setting('reserved_connections')::int AS reserved_budget
+)
+SELECT jsonb_build_object(
+ 'max_connections', limits.max_connections,
+ 'reserved_budget', limits.reserved_budget,
+ 'usable_connections', greatest(limits.max_connections - limits.reserved_budget, 0),
+ 'connected', totals.connected,
+ 'active', totals.active,
+ 'idle_in_transaction', totals.idle_in_transaction,
+ 'utilization_ratio', round(
+    totals.connected::numeric /
+    greatest(limits.max_connections - limits.reserved_budget, 1), 6),
+ 'role_database_pairs',
+    coalesce((SELECT jsonb_agg(to_jsonb(bounded_pairs)
+      ORDER BY connected DESC, role_ref, database_ref) FROM bounded_pairs), '[]'::jsonb),
+ 'roles_spanning_databases',
+    coalesce((SELECT jsonb_agg(to_jsonb(spanning)
+      ORDER BY database_count DESC, role_ref) FROM spanning), '[]'::jsonb),
+ 'isolation_scope', 'role_database_refs_only',
+ 'arbitrary_sql', false
+)
+FROM totals CROSS JOIN limits;
+$$;
+
 CREATE OR REPLACE FUNCTION codestra_ops.security() RETURNS jsonb
 LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 SELECT jsonb_build_object(
@@ -63,7 +112,8 @@ SELECT jsonb_build_object(
 $$;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA codestra_ops FROM PUBLIC;
 ALTER FUNCTION codestra_ops.connections() OWNER TO postgres;
+ALTER FUNCTION codestra_ops.pool_isolation() OWNER TO postgres;
 ALTER FUNCTION codestra_ops.security() OWNER TO postgres;
 ALTER FUNCTION codestra_ops.recovery() OWNER TO postgres;
-GRANT EXECUTE ON FUNCTION codestra_ops.connections(), codestra_ops.security(), codestra_ops.recovery() TO codestra_monitor;
+GRANT EXECUTE ON FUNCTION codestra_ops.connections(), codestra_ops.pool_isolation(), codestra_ops.security(), codestra_ops.recovery() TO codestra_monitor;
 COMMIT;

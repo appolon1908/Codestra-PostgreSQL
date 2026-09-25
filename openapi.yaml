@@ -152,6 +152,7 @@ paths:
                       - backups.catalog
                       - backups.rehearsals
                       - runtime.connections
+                      - runtime.pool_isolation
                       - runtime.security
                       - runtime.recovery
                       - runtime.wal
@@ -562,6 +563,88 @@ paths:
                           - application
                         connected: *id006
                         active: *id006
+        '503':
+          description: Unavailable; no sensitive diagnostics returned
+          content:
+            application/json:
+              schema: *id004
+  /v1/postgresql/pool-isolation:
+    get:
+      operationId: poolIsolationReadback
+      description: Fixed, bounded aggregate of client-backend role/database references and pool pressure. No SQL text, credentials, client addresses, session identifiers, or arbitrary query capability.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - max_connections
+                - reserved_budget
+                - usable_connections
+                - connected
+                - active
+                - idle_in_transaction
+                - utilization_ratio
+                - role_database_pairs
+                - roles_spanning_databases
+                - isolation_scope
+                - arbitrary_sql
+                additionalProperties: false
+                properties:
+                  max_connections: *id006
+                  reserved_budget: *id006
+                  usable_connections: *id006
+                  connected: *id006
+                  active: *id006
+                  idle_in_transaction: *id006
+                  utilization_ratio:
+                    type: number
+                    minimum: 0
+                  role_database_pairs:
+                    type: array
+                    maxItems: 64
+                    items:
+                      type: object
+                      required:
+                      - role_ref
+                      - database_ref
+                      - connected
+                      - active
+                      - idle_in_transaction
+                      additionalProperties: false
+                      properties:
+                        role_ref:
+                          type: string
+                          minLength: 1
+                          maxLength: 128
+                        database_ref:
+                          type: string
+                          minLength: 1
+                          maxLength: 128
+                        connected: *id006
+                        active: *id006
+                        idle_in_transaction: *id006
+                  roles_spanning_databases:
+                    type: array
+                    maxItems: 64
+                    items:
+                      type: object
+                      required:
+                      - role_ref
+                      - database_count
+                      additionalProperties: false
+                      properties:
+                        role_ref:
+                          type: string
+                          minLength: 1
+                          maxLength: 128
+                        database_count: *id006
+                  isolation_scope:
+                    const: role_database_refs_only
+                  arbitrary_sql:
+                    const: false
         '503':
           description: Unavailable; no sensitive diagnostics returned
           content:

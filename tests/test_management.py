@@ -35,6 +35,55 @@ class ManagementTests(unittest.TestCase):
         ):
             self.assertEqual(server.probe(), {"reachable": False})
 
+
+    def test_pool_isolation_is_bounded_reference_only(self):
+        import json
+
+        body = {
+            "max_connections": 100,
+            "reserved_budget": 5,
+            "usable_connections": 95,
+            "connected": 12,
+            "active": 4,
+            "idle_in_transaction": 1,
+            "utilization_ratio": 0.126316,
+            "role_database_pairs": [
+                {
+                    "role_ref": "tenant_a_runtime",
+                    "database_ref": "app",
+                    "connected": 7,
+                    "active": 3,
+                    "idle_in_transaction": 1,
+                },
+                {
+                    "role_ref": "tenant_b_runtime",
+                    "database_ref": "app_b",
+                    "connected": 5,
+                    "active": 1,
+                    "idle_in_transaction": 0,
+                },
+            ],
+            "roles_spanning_databases": [],
+            "isolation_scope": "role_database_refs_only",
+            "arbitrary_sql": False,
+        }
+        with patch.object(server, "query", return_value=json.dumps(body)):
+            code, payload, _ = server.response("/v1/postgresql/pool-isolation")
+        self.assertEqual(code, 200)
+        self.assertEqual(payload, body)
+        serialized = json.dumps(payload).lower()
+        for forbidden in (
+            "query_text",
+            "password",
+            "session_id",
+            "application_name",
+            "client_addr",
+        ):
+            self.assertNotIn(forbidden, serialized)
+        self.assertFalse(payload["arbitrary_sql"])
+        capabilities = server.response("/v1/capabilities")[1]["capabilities"]
+        self.assertIn("runtime.pool_isolation", capabilities)
+
     def test_unknown_endpoint(self):
         self.assertEqual(server.response("/v1/postgresql/query")[0], 404)
 

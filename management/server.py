@@ -20,6 +20,7 @@ OPERATIONS = {
     "/v1/postgresql/capacity": "SELECT codestra_ops.capacity()",
     "/v1/postgresql/maintenance": "SELECT codestra_ops.maintenance()",
     "/v1/postgresql/connections": "SELECT codestra_ops.connections()",
+    "/v1/postgresql/pool-isolation": "SELECT codestra_ops.pool_isolation()",
     "/v1/postgresql/security": "SELECT codestra_ops.security()",
     "/v1/postgresql/recovery": "SELECT codestra_ops.recovery()",
 }
@@ -119,6 +120,12 @@ def readiness_metrics():
             "index_count",
             "disk_free_percent",
             "sample_age_seconds",
+        ),
+        "pool-isolation": (
+            "connected",
+            "active",
+            "idle_in_transaction",
+            "utilization_ratio",
         ),
         "maintenance": (
             "autovacuum_enabled",
@@ -222,6 +229,7 @@ def response(path):
                     "backups.catalog",
                     "backups.rehearsals",
                     "runtime.connections",
+                    "runtime.pool_isolation",
                     "runtime.security",
                     "runtime.recovery",
                     "runtime.wal",

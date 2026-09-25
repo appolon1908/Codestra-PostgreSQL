@@ -102,3 +102,12 @@ Suggested initial alert thresholds (tune to the deployment's RPO/RTO and load):
 All names above are prefixed `codestra_postgresql_`. Alerting is advisory; no metric,
 registry claim or rehearsal result is failover authorization. See the runbook for
 scope, evidence freshness and operator import contracts.
+
+## Connection-pool and tenant-isolation readback
+
+`GET /v1/postgresql/pool-isolation` is a fixed read-only aggregate for Middleware. It
+returns pool pressure plus at most 64 role/database reference pairs and at most 64 roles
+that currently span more than one database. It never returns SQL text, application rows,
+client addresses, session identifiers or credentials, and it cannot execute caller-supplied
+SQL. `roles_spanning_databases` is an observation for policy review, not proof of a tenant
+breach; ownership policy remains authoritative in the operations catalog.
