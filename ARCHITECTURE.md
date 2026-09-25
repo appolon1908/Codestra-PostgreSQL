@@ -49,3 +49,10 @@ All management operations are GET-only and effect-free; unsupported methods retu
 501 and unknown GET paths return JSON 404. Future mutating operations require an
 explicit contract, authorization and idempotency design through Middleware V3.
 Backups and restores remain operator CLI jobs, not remote API capabilities.
+
+Operational metadata is stored in a separate operator-written SQLite volume:
+backup inventory and isolated restore rehearsal reports only. Management reads it
+without write access and calls three fixed, zero-argument PostgreSQL functions for
+aggregate connection, TLS/policy and recovery observations. This adds no shared
+business-data authority, application table access, arbitrary SQL API, cross-app
+writes, or HTTP restore/backup mutations. Middleware V3 retains integration authority.

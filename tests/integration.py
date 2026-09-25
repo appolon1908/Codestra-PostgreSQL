@@ -80,6 +80,9 @@ try:
         "/v1/capabilities",
         "/v1/postgresql/status",
         "/metrics",
+        "/v1/postgresql/connections",
+        "/v1/postgresql/security",
+        "/v1/postgresql/recovery",
     ):
         assert get(path)[0] == 200, path
     assert get("/v1/postgresql/query")[0] == 404
@@ -87,6 +90,39 @@ try:
         json.loads(get("/v1/postgresql/status")[1])["database"]["version_num"] // 10000
         == 17
     )
+    connections = json.loads(get("/v1/postgresql/connections")[1])
+    assert connections["max_connections"] == 100
+    assert connections["reserved_budget"] == 5
+    assert any(
+        row["class"] == "monitoring" and row["active"] >= 1
+        for row in connections["by_role_class"]
+    )
+    security = json.loads(get("/v1/postgresql/security")[1])
+    assert security["ssl_enabled"] is False
+    assert security["pg_hba_rules_valid"] is True
+    assert len(security["pg_hba_policy_fingerprint"]) == 64
+    sql("CREATE ROLE policy_fixture NOLOGIN", "postgres")
+    assert (
+        sql(
+            "SELECT has_function_privilege('policy_fixture', 'codestra_ops.security()', 'EXECUTE')",
+            "postgres",
+        )
+        == "f"
+    )
+    assert (
+        sql(
+            "SELECT has_function_privilege('codestra_monitor', 'codestra_ops.security()', 'EXECUTE')",
+            "postgres",
+        )
+        == "t"
+    )
+    changed = json.loads(get("/v1/postgresql/security")[1])
+    assert changed["role_policy_fingerprint"] != security["role_policy_fingerprint"]
+    assert changed["pg_hba_policy_fingerprint"] == security["pg_hba_policy_fingerprint"]
+    recovery = json.loads(get("/v1/postgresql/recovery")[1])
+    assert recovery["role"] == "primary" and recovery["recovery_proven"] is False
+    assert recovery["replication_lag_seconds"] is None
+    assert get("/v1/backups")[0] == 503  # no catalog yet
     sql("CREATE DATABASE fixture", "postgres")
     sql(
         "CREATE TABLE sample (id int PRIMARY KEY, value text); INSERT INTO sample VALUES (1, 'restored-value')"
@@ -126,9 +162,16 @@ try:
         "--allow-plaintext-dev",
     ).stdout.strip()
     assert archive.startswith("/backups/")
+    backup_id = Path(archive).name
+    row = json.loads(get("/v1/backups/" + backup_id)[1])
+    assert row["database_ref"] == "fixture" and row["retention_status"] == "retained"
+    assert json.loads(get("/v1/backups")[1])["items"][0] == row
     tool("verify", archive)
     tool("restore", archive, "--target", "rehearsal")
     assert sql("SELECT value FROM sample WHERE id=1", "rehearsal") == "restored-value"
+    report = json.loads(get("/v1/rehearsals")[1])["items"][0]
+    assert report["verification_status"] == "passed" and report["digest_match"] is True
+    assert get("/v1/rehearsals/" + report["report_id"])[0] == 200
     assert tool("restore", archive, "--target", "rehearsal", ok=False).returncode != 0
     assert tool("restore", archive, "--target", "fixture", ok=False).returncode != 0
     # Exercise real authenticated encryption with throwaway age identities.
@@ -208,6 +251,9 @@ try:
     )
     compose("stop", "postgres")
     assert get("/healthz")[0] == 200
+    assert get("/v1/backups")[0] == 200  # independent of business DB availability
+    for path in ("connections", "security", "recovery"):
+        assert get("/v1/postgresql/" + path)[0] == 503
     assert get("/readyz")[0] == 503
     assert get("/v1/postgresql/status")[0] == 503
     assert "codestra_postgresql_ready 0" in get("/metrics")[1]
@@ -219,7 +265,7 @@ try:
     else:
         raise AssertionError("readiness did not recover")
     print(
-        "PASS: startup, API, version, app isolation, exporter, backup verification, encrypted restore rehearsal, overwrite refusal, corruption refusal, outage/recovery"
+        "PASS: startup, operational APIs, catalog/reports, policy fingerprints, least privilege, version, app isolation, exporter, backup verification, encrypted restore rehearsal, overwrite refusal, corruption refusal, outage/recovery"
     )
 finally:
     # Only this run's randomly named project/volumes are removed.

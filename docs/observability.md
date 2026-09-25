@@ -60,3 +60,12 @@ Assign alert ownership, thresholds and paging policy in the deployment repositor
 References: [postgres-exporter upstream](https://github.com/prometheus-community/postgres_exporter),
 [PostgreSQL 17 HBA](https://www.postgresql.org/docs/17/auth-pg-hba-conf.html),
 [PostgreSQL 17 pg_dump](https://www.postgresql.org/docs/17/app-pgdump.html).
+
+Operational catalog gauges: `codestra_postgresql_catalog_available` reports
+whether both metadata tables can be read; `codestra_postgresql_catalog_backups`
+and `codestra_postgresql_catalog_rehearsals` count all stored records (including
+backup tombstones). Counts are omitted when unavailable, never fabricated as zero.
+No database names, backup IDs, roles, or targets become metric labels. Alert on
+catalog unavailability separately from PostgreSQL readiness; use rehearsal reports
+to investigate stale/running/failed attempts. Configuration presence is not a
+recovery-success metric.

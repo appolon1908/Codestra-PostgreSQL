@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Codestra PostgreSQL Management API
-  version: 1.0.0
+  version: 1.1.0
   description: Read-only runtime boundary. Internal use only; cross-system access
     via Caddy/Kong/Middleware V3. No application records or mutation endpoints. Network
     isolation is mandatory; this dev API has no application authentication.
@@ -149,6 +149,11 @@ paths:
                       - runtime.status
                       - runtime.health
                       - runtime.metrics
+                      - backups.catalog
+                      - backups.rehearsals
+                      - runtime.connections
+                      - runtime.security
+                      - runtime.recovery
                   mutations:
                     const: false
                   integration_authority:
@@ -326,3 +331,333 @@ paths:
                         - in_recovery
                         - max_connections
       summary: Readiness alias for Middleware V3
+  /v1/backups:
+    get:
+      operationId: backupsList
+      description: Latest 100 records in descending timestamp/id order. Truncated
+        indicates older records; known IDs remain accessible by detail. Missing catalog
+        returns 503.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                - truncated
+                additionalProperties: false
+                properties:
+                  items:
+                    type: array
+                    maxItems: 100
+                    items: &id003
+                      type: object
+                      required:
+                      - backup_id
+                      - database_ref
+                      - created_at
+                      - digest
+                      - encrypted
+                      - size
+                      - retention_status
+                      additionalProperties: false
+                      properties:
+                        backup_id: &id001
+                          type: string
+                        database_ref: *id001
+                        created_at:
+                          type: string
+                          format: date-time
+                        digest:
+                          type: string
+                          pattern: ^[a-f0-9]{64}$
+                        encrypted: &id002
+                          type: boolean
+                        size: &id006
+                          type: integer
+                          minimum: 0
+                        retention_status:
+                          enum:
+                          - retained
+                          - deletion_pending
+                          - deleted
+                  truncated: *id002
+        '503':
+          description: Unavailable; no sensitive diagnostics returned
+          content:
+            application/json:
+              schema: &id004
+                type: object
+                required:
+                - error
+                additionalProperties: false
+                properties:
+                  error:
+                    enum:
+                    - unavailable
+                    - not_found
+  /v1/backups/{id}:
+    get:
+      operationId: backupsDetail
+      description: Read-only operational metadata.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: *id003
+        '503':
+          description: Unavailable; no sensitive diagnostics returned
+          content:
+            application/json:
+              schema: *id004
+        '404':
+          description: Unknown record
+          content:
+            application/json:
+              schema: *id004
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-zA-Z0-9_-]{1,80}$
+  /v1/rehearsals:
+    get:
+      operationId: rehearsalsList
+      description: Latest 100 records in descending timestamp/id order. Truncated
+        indicates older records; known IDs remain accessible by detail. Missing catalog
+        returns 503.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                - truncated
+                additionalProperties: false
+                properties:
+                  items:
+                    type: array
+                    maxItems: 100
+                    items: &id005
+                      type: object
+                      required:
+                      - report_id
+                      - backup_ref
+                      - isolated_target
+                      - verification_status
+                      - duration_seconds
+                      - digest_match
+                      - created_at
+                      - verification_scope
+                      additionalProperties: false
+                      properties:
+                        report_id: *id001
+                        backup_ref: *id001
+                        isolated_target: *id001
+                        verification_status:
+                          enum:
+                          - running
+                          - passed
+                          - failed
+                        duration_seconds:
+                          type: number
+                          minimum: 0
+                        digest_match:
+                          type:
+                          - boolean
+                          - 'null'
+                        created_at:
+                          type: string
+                          format: date-time
+                        verification_scope:
+                          const: archive_integrity_and_restore_only
+                  truncated: *id002
+        '503':
+          description: Unavailable; no sensitive diagnostics returned
+          content:
+            application/json:
+              schema: *id004
+  /v1/rehearsals/{id}:
+    get:
+      operationId: rehearsalsDetail
+      description: Read-only operational metadata.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: *id005
+        '503':
+          description: Unavailable; no sensitive diagnostics returned
+          content:
+            application/json:
+              schema: *id004
+        '404':
+          description: Unknown record
+          content:
+            application/json:
+              schema: *id004
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-zA-Z0-9_-]{1,80}$
+  /v1/postgresql/connections:
+    get:
+      operationId: connectionBudget
+      description: Fixed aggregate of client backends and WAL senders. Active means
+        state=active. Empty classes omitted; connected includes idle. Reserved budget
+        is PostgreSQL reserved slots, not app pool allocation.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - max_connections
+                - reserved_budget
+                - superuser_reserved
+                - role_reserved
+                - by_role_class
+                additionalProperties: false
+                properties:
+                  max_connections: *id006
+                  reserved_budget: *id006
+                  superuser_reserved: *id006
+                  role_reserved: *id006
+                  by_role_class:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                      - class
+                      - connected
+                      - active
+                      additionalProperties: false
+                      properties:
+                        class:
+                          enum:
+                          - administrator
+                          - monitoring
+                          - replication
+                          - application
+                        connected: *id006
+                        active: *id006
+        '503':
+          description: Unavailable; no sensitive diagnostics returned
+          content:
+            application/json:
+              schema: *id004
+  /v1/postgresql/security:
+    get:
+      operationId: securityReadiness
+      description: SHA-256 fingerprints of parsed on-disk HBA and role attributes/memberships.
+        Not certificate validation or proof the HBA file was reloaded. No raw policy
+        or secrets.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - ssl_enabled
+                - minimum_tls_version
+                - tls_policy_ref
+                - credential_policy_ref
+                - pg_hba_policy_fingerprint
+                - pg_hba_rules_valid
+                - role_policy_fingerprint
+                additionalProperties: false
+                properties:
+                  ssl_enabled: *id002
+                  minimum_tls_version: *id001
+                  tls_policy_ref: *id001
+                  credential_policy_ref: *id001
+                  pg_hba_policy_fingerprint:
+                    type: string
+                    pattern: ^[a-f0-9]{64}$
+                  pg_hba_rules_valid: *id002
+                  role_policy_fingerprint:
+                    type: string
+                    pattern: ^[a-f0-9]{64}$
+        '503':
+          description: Unavailable; no sensitive diagnostics returned
+          content:
+            application/json:
+              schema: *id004
+  /v1/postgresql/recovery:
+    get:
+      operationId: recoveryReadiness
+      description: Configuration presence != successful recovery proof. Lag is maximum
+        sender replay_lag, null when unavailable, not assumed zero. Standby gap measures
+        received versus replayed bytes, not upstream backlog. PITR requires independently
+        verified physical backups and continuous WAL.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - role
+                - in_recovery
+                - wal_level
+                - wal_position
+                - receive_position
+                - replay_paused
+                - replica_count
+                - replication_lag_seconds
+                - receive_replay_gap_bytes
+                - archive_mode_enabled
+                - archive_transport_configured
+                - restore_command_configured
+                - recovery_proven
+                additionalProperties: false
+                properties:
+                  role:
+                    enum:
+                    - primary
+                    - standby
+                  in_recovery: *id002
+                  wal_level: *id001
+                  wal_position: &id007
+                    type:
+                    - string
+                    - 'null'
+                  receive_position: *id007
+                  replay_paused:
+                    type:
+                    - boolean
+                    - 'null'
+                  replica_count: *id006
+                  replication_lag_seconds: &id008
+                    type:
+                    - number
+                    - 'null'
+                    minimum: 0
+                  receive_replay_gap_bytes: *id008
+                  archive_mode_enabled: *id002
+                  archive_transport_configured: *id002
+                  restore_command_configured: *id002
+                  recovery_proven:
+                    const: false
+        '503':
+          description: Unavailable; no sensitive diagnostics returned
+          content:
+            application/json:
+              schema: *id004

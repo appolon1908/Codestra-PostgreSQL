@@ -7,11 +7,18 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import tempfile
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+
+if __package__:
+    from . import catalog
+else:
+    import catalog
 
 
 def run(args, **kwargs):
@@ -87,7 +94,31 @@ def backup(directory, database, plaintext=False):
         verify(stage)
         destination = directory / name
         stage.rename(destination)
+    catalog.write(
+        "backups",
+        backup_record(destination, manifest),
+        directory / "operations.sqlite3",
+    )
     return destination
+
+
+def backup_record(directory, manifest):
+    if not re.fullmatch(r"\d{8}T\d{6}Z-[a-f0-9]{32}", directory.name):
+        raise ValueError("Invalid backup identifier")
+    if not re.fullmatch(r"[a-z][a-z0-9_]{0,62}", manifest["database"]):
+        raise ValueError("Invalid database reference")
+    stamp = datetime.fromisoformat(manifest["created_at"])
+    if stamp.tzinfo is None:
+        raise ValueError("Backup timestamp requires timezone")
+    return {
+        "backup_id": directory.name,
+        "database_ref": manifest["database"],
+        "created_at": stamp.astimezone(timezone.utc).isoformat(),
+        "digest": manifest["sha256"],
+        "encrypted": manifest["encrypted"],
+        "size": (directory / manifest["artifact"]).stat().st_size,
+        "retention_status": "retained",
+    }
 
 
 def verified_dump(directory, temporary):
@@ -115,11 +146,18 @@ def verify(directory):
         verified_dump(directory, temporary)
 
 
-def restore(directory, target):
+def restore(directory, target, progress=None):
     if not re.fullmatch(r"[a-z][a-z0-9_]{0,62}", target):
         raise ValueError("Target must be a simple lowercase database name")
     with tempfile.TemporaryDirectory(prefix="codestra-restore-") as temporary:
-        raw, manifest = verified_dump(directory, temporary)
+        try:
+            raw, manifest = verified_dump(directory, temporary)
+        except ValueError as exc:
+            if progress is not None and "checksum mismatch" in str(exc):
+                progress["digest_match"] = False
+            raise
+        if progress is not None:
+            progress["digest_match"] = True
         if target == manifest["database"]:
             raise ValueError("Restore must target a different, new database")
         # No --clean or --create: createdb fails if the target already exists.
@@ -151,6 +189,36 @@ def restore(directory, target):
         )
 
 
+def rehearse(directory, target):
+    """Persist attempts before execution so interruptions remain visible as running."""
+    if not re.fullmatch(r"[a-z][a-z0-9_]{0,62}", target):
+        raise ValueError("Target must be a simple lowercase database name")
+    default = directory.parent / "operations.sqlite3"
+    if catalog.read("backups", directory.name, default) is None:
+        raise ValueError("Backup must be catalogued before rehearsal")
+    report = {
+        "report_id": uuid.uuid4().hex,
+        "backup_ref": directory.name,
+        "isolated_target": target,
+        "verification_status": "running",
+        "duration_seconds": 0.0,
+        "digest_match": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "verification_scope": "archive_integrity_and_restore_only",
+    }
+    catalog.write("rehearsals", report, default)
+    started = time.monotonic()
+    try:
+        restore(directory, target, report)
+        report["verification_status"] = "passed"
+    except (OSError, ValueError, KeyError):
+        report["verification_status"] = "failed"
+        raise
+    finally:
+        report["duration_seconds"] = round(time.monotonic() - started, 6)
+        catalog.write("rehearsals", report, default)
+
+
 def retain(directory, days):
     if days < 1:
         raise ValueError("Retention must be at least one day")
@@ -168,7 +236,19 @@ def retain(directory, days):
         if (now - stamp).total_seconds() > days * 86400:
             # Only remove complete, verified backups. Corrupt sets need investigation.
             verify(entry)
+            default = directory / "operations.sqlite3"
+            record = (
+                catalog.read("backups", entry.name, default)
+                if catalog.location(default).exists()
+                else None
+            )
+            if record:
+                record["retention_status"] = "deletion_pending"
+                catalog.write("backups", record, default)
             shutil.rmtree(entry)
+            if record:
+                record["retention_status"] = "deleted"
+                catalog.write("backups", record, default)
 
 
 def main():
@@ -184,6 +264,8 @@ def main():
         child.add_argument("backup", type=Path)
         if command == "restore":
             child.add_argument("--target", required=True)
+    register = commands.add_parser("catalog-register")
+    register.add_argument("backup", type=Path)
     retention = commands.add_parser("retain")
     retention.add_argument("--directory", type=Path, default=Path("backups"))
     retention.add_argument(
@@ -197,14 +279,25 @@ def main():
                     args.directory.resolve(), args.database, args.allow_plaintext_dev
                 )
             )
+        elif args.command == "catalog-register":
+            directory = args.backup.resolve()
+            verify(directory)
+            manifest = json.loads((directory / "manifest.json").read_text())
+            catalog.write(
+                "backups",
+                backup_record(directory, manifest),
+                directory.parent / "operations.sqlite3",
+            )
         elif args.command == "verify":
             verify(args.backup.resolve())
         elif args.command == "restore":
-            restore(args.backup.resolve(), args.target)
+            rehearse(args.backup.resolve(), args.target)
         else:
             retain(args.directory.resolve(), args.days)
-    except (OSError, ValueError, KeyError) as exc:
-        parser.exit(1, f"{exc}\n")
+    except (OSError, ValueError, KeyError, sqlite3.Error):
+        parser.exit(
+            1, "Backup operation failed; inspect restricted operator diagnostics.\n"
+        )
 
 
 if __name__ == "__main__":

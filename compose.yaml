@@ -29,6 +29,9 @@ services:
       PGDATABASE: postgres
       PGUSER: codestra_monitor
       PGPASSWORD_FILE: /run/secrets/monitor_password
+      OPERATIONS_CATALOG: /catalog/operations.sqlite3
+    volumes:
+      - operations:/catalog:ro
     secrets: [monitor_password]
     ports: ["127.0.0.1:${MANAGEMENT_PORT:-8080}:8080"]
     networks: [database, management]
@@ -67,10 +70,12 @@ services:
       PGHOST: /var/run/postgresql
       PGUSER: postgres
       PGDATABASE: postgres
+      OPERATIONS_CATALOG: /catalog/operations.sqlite3
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
     volumes:
       - pgsocket:/var/run/postgresql
       - backups:/backups
+      - operations:/catalog
     network_mode: none
     read_only: true
     tmpfs: [/tmp:mode=1777]
@@ -85,6 +90,7 @@ volumes:
   pgdata:
   pgsocket:
   backups:
+  operations:
 secrets:
   admin_password:
     file: ${OPENBAO_RENDER_DIR:-./.secrets}/admin_password

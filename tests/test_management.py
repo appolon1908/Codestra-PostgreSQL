@@ -44,22 +44,28 @@ class ManagementTests(unittest.TestCase):
 
         contract = yaml.safe_load(Path("openapi.yaml").read_text())
         for reachable in (True, False):
-            with patch.object(
-                server,
-                "probe",
-                return_value=(
-                    {
-                        "reachable": True,
-                        "version_num": 170006,
-                        "in_recovery": False,
-                        "max_connections": 100,
-                    }
-                    if reachable
-                    else {"reachable": False}
+            with (
+                patch.object(server, "query", side_effect=ValueError),
+                patch.object(server.catalog, "read", side_effect=OSError),
+                patch.object(
+                    server,
+                    "probe",
+                    return_value=(
+                        {
+                            "reachable": True,
+                            "version_num": 170006,
+                            "in_recovery": False,
+                            "max_connections": 100,
+                        }
+                        if reachable
+                        else {"reachable": False}
+                    ),
                 ),
             ):
                 for path, item in contract["paths"].items():
-                    code, body, content_type = server.response(path)
+                    code, body, content_type = server.response(
+                        path.replace("{id}", "example")
+                    )
                     response = item["get"]["responses"][str(code)]
                     media = content_type.split(";")[0]
                     schema = response["content"][media]["schema"]

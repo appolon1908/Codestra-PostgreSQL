@@ -76,3 +76,63 @@ compatible host for release validation. A local diagnostic override can be suppl
 to `tests/integration.py` with `TEST_COMPOSE_OVERRIDE=/absolute/path/to/override.yaml`;
 report any such relaxation with the results. The supplied CI template runs the committed configuration once installed by a
 workflow-authorized maintainer.
+
+## Operational metadata and readiness APIs
+
+All routes are GET-only behind the existing internal Middleware V3 boundary.
+The runtime remains infrastructure, not a shared business-data authority. There
+is no SQL passthrough, cross-app write API, backup creation API, or production
+restore HTTP endpoint. Keep management private and apply gateway authentication
+and rate limits before allowing remote access.
+
+| Route | Meaning |
+| --- | --- |
+| `/v1/backups` and `/v1/backups/{id}` | Backup metadata, including retention tombstones |
+| `/v1/rehearsals` and `/v1/rehearsals/{id}` | Durable isolated restore attempts |
+| `/v1/postgresql/connections` | Connection limit, PostgreSQL reserved slots and counts by role class |
+| `/v1/postgresql/security` | SSL setting, minimum TLS version, policy references and SHA-256 fingerprints |
+| `/v1/postgresql/recovery` | Primary/standby, WAL positions, replication observations and PITR configuration presence |
+
+Lists return the latest 100 records ordered by timestamp then ID, with `truncated`
+when older records exist. Retrieve older known IDs through detail routes; use the
+operator catalog for full inventory. A missing/locked/unreadable catalog or failed
+PostgreSQL probe returns a redacted 503. Unknown record IDs return 404. Backup and
+rehearsal metadata remain available during a PostgreSQL outage. Management mounts
+only the separate `operations` volume read-only, never backup payloads or keys.
+
+On existing installations, apply `init/20-operations.sql` to database `postgres`
+as the bootstrap administrator with `psql -X -v ON_ERROR_STOP=1 -f ...` through
+the governed operator channel. New volumes apply it automatically. Recreate
+management to acquire its read-only operations mount. The functions are owned by
+postgres, use a pinned `pg_catalog` search path, accept no arguments, and revoke
+PUBLIC execution. The monitor receives only schema USAGE and execution of the
+three fixed functions; it does not receive `pg_monitor`, raw HBA access or app grants.
+Review their definitions as privileged code during upgrades.
+
+Connection classes use precedence administrator, monitoring (the two named
+Codestra monitor/exporter roles), replication (REPLICATION attribute), application
+(all remaining client roles). Counts include client backends and WAL senders;
+`connected` includes idle sessions, while `active` means `state = active` and
+includes the probe itself. Omitted classes have zero connections. Reserved budget
+is superuser_reserved_connections + reserved_connections, not app pool allocations.
+WAL senders also have separate PostgreSQL limits, so do not infer exact free client
+slots by subtracting the aggregate. Compare against app-owned pool budgets.
+
+Security fingerprints summarize parsed **on-disk** HBA rules (including order,
+file references and parse errors) and role attributes/configuration/memberships.
+They exclude password hashes and expose no raw contents. They are drift signals,
+not compliance verdicts: compare to an approved baseline. Role fingerprinting does
+not cover per-database ACLs or every app grant. HBA presence/validity does not prove
+reload, and SSL enabled/minimum version does not prove certificate validity or
+client enforcement. TLS and OpenBao references point to repository guidance,
+not certificates or DSNs. Keep OpenBao rendering and rotation unchanged.
+
+Recovery configuration presence **does not prove successful recovery**;
+`recovery_proven` is always false. Archive mode and a nonempty archive command or
+library are separate flags, as is a restore command. Logical dumps do not supply
+PITR; validate independent physical base backups, WAL continuity, key recovery,
+restore points and app invariants in an isolated environment. Sender replay lag
+is the maximum observed interval, nullable when unavailable/idle; it is not zero
+by assumption. Standby receive/replay byte gap excludes upstream WAL not received.
+See PostgreSQL's [statistics semantics](https://www.postgresql.org/docs/17/monitoring-stats.html)
+and [recovery functions](https://www.postgresql.org/docs/17/functions-admin.html).

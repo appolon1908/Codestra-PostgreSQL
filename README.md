@@ -76,3 +76,11 @@ not a production backup identity. Production uses app-scoped credentials and
 separate backup jobs. Deployment-specific certificates, encryption recipients,
 offsite storage, schedules, RPO/RTO, and digest-pinned image promotion are operator
 responsibilities. This dev runtime is not an HA or PITR solution.
+
+Operational APIs now include backup catalog and rehearsal list/detail under
+`/v1/backups` and `/v1/rehearsals`, plus read-only `/v1/postgresql/connections`,
+`/v1/postgresql/security`, and `/v1/postgresql/recovery`. See the
+[operational runbook](docs/runbook.md#operational-metadata-and-readiness-apis)
+for existing-volume installation, field semantics and limitations, and the
+[backup metadata procedure](docs/backups.md#durable-operator-metadata) for catalog
+storage and reconciliation. Backup/restore actions remain operator CLI only.

@@ -2,34 +2,46 @@
 
 import json
 import os
+import re
+import sqlite3
 import subprocess
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from scripts import catalog
 
 STARTED = time.monotonic()
 QUERY = "SELECT current_setting('server_version_num')::int, pg_is_in_recovery(), current_setting('max_connections')::int"
 
 
+OPERATIONS = {
+    "/v1/postgresql/connections": "SELECT codestra_ops.connections()",
+    "/v1/postgresql/security": "SELECT codestra_ops.security()",
+    "/v1/postgresql/recovery": "SELECT codestra_ops.recovery()",
+}
+
+
+def query(sql):
+    # Callers supply only module constants; HTTP inputs never enter SQL.
+    env = os.environ.copy()
+    with open(env.get("PGPASSWORD_FILE", "/run/secrets/monitor_password")) as secret:
+        env["PGPASSWORD"] = secret.read().strip()
+    env["PGCONNECT_TIMEOUT"] = "2"
+    env["PGOPTIONS"] = "-c statement_timeout=2000 -c default_transaction_read_only=on"
+    result = subprocess.run(
+        ["psql", "-X", "-w", "-At", "-F", "|", "-c", sql],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=4,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
 def probe():
     try:
-        env = os.environ.copy()
-        with open(
-            env.get("PGPASSWORD_FILE", "/run/secrets/monitor_password")
-        ) as secret:
-            env["PGPASSWORD"] = secret.read().strip()
-        env["PGCONNECT_TIMEOUT"] = "2"
-        env["PGOPTIONS"] = (
-            "-c statement_timeout=2000 -c default_transaction_read_only=on"
-        )
-        result = subprocess.run(
-            ["psql", "-X", "-w", "-At", "-F", "|", "-c", QUERY],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=4,
-            check=True,
-        )
-        version, recovery, limit = result.stdout.strip().split("|")
+        version, recovery, limit = query(QUERY).split("|")
         return {
             "reachable": True,
             "version_num": int(version),
@@ -41,6 +53,20 @@ def probe():
 
 
 def response(path):
+    if path in OPERATIONS:
+        try:
+            return 200, json.loads(query(OPERATIONS[path])), "application/json"
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return 503, {"error": "unavailable"}, "application/json"
+    match = re.fullmatch(r"/v1/(backups|rehearsals)(?:/([a-zA-Z0-9_-]{1,80}))?", path)
+    if match:
+        try:
+            body = catalog.read(match[1], match[2])
+            if body is None:
+                return 404, {"error": "not_found"}, "application/json"
+            return 200, body, "application/json"
+        except (OSError, ValueError, sqlite3.Error):
+            return 503, {"error": "unavailable"}, "application/json"
     if path == "/healthz":
         return 200, {"status": "ok"}, "application/json"
     if path == "/v1/capabilities":
@@ -49,7 +75,16 @@ def response(path):
             {
                 "service": "codestra-postgresql",
                 "api_version": "1",
-                "capabilities": ["runtime.status", "runtime.health", "runtime.metrics"],
+                "capabilities": [
+                    "runtime.status",
+                    "runtime.health",
+                    "runtime.metrics",
+                    "backups.catalog",
+                    "backups.rehearsals",
+                    "runtime.connections",
+                    "runtime.security",
+                    "runtime.recovery",
+                ],
                 "mutations": False,
                 "integration_authority": "Middleware V3",
             },
@@ -67,6 +102,23 @@ def response(path):
                 "# TYPE codestra_postgresql_management_uptime_seconds gauge\n"
                 f"codestra_postgresql_management_uptime_seconds {time.monotonic() - STARTED:.3f}\n"
             )
+            try:
+                counts = catalog.counts()
+                available = True
+            except (OSError, ValueError, sqlite3.Error):
+                counts = {}
+                available = False
+            body += (
+                "# HELP codestra_postgresql_catalog_available Operational catalog readable.\n"
+                "# TYPE codestra_postgresql_catalog_available gauge\n"
+                f"codestra_postgresql_catalog_available {int(available)}\n"
+            )
+            for kind, count in counts.items():
+                body += (
+                    f"# HELP codestra_postgresql_catalog_{kind} Stored metadata records including tombstones.\n"
+                    f"# TYPE codestra_postgresql_catalog_{kind} gauge\n"
+                    f"codestra_postgresql_catalog_{kind} {count}\n"
+                )
             return 200, body, "text/plain; version=0.0.4; charset=utf-8"
         return (
             (200 if ready else 503),

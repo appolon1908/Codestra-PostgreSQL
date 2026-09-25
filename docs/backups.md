@@ -42,7 +42,7 @@ runtime image includes PostgreSQL 17 clients, Python and age.
 
 The backup stages a dump in a private directory, validates its table of contents,
 computes SHA-256, encrypts, decrypts and verifies both checksums, then publishes the
-complete directory by rename. Failures do not publish a final backup. Interrupted
+complete directory by rename. Prepublication failures do not publish a final backup. Interrupted
 `.staging-*` directories require operator cleanup. Plaintext staging is temporary,
 not securely erased: use encrypted scratch storage or tmpfs, with enough capacity,
 and encrypted backup volumes. Restore verification uses `TMPDIR` for plaintext.
@@ -103,3 +103,44 @@ and verifies them before deletion. It skips unrelated names and top-level symlin
 corruption stops the command for investigation. It does not guarantee a minimum
 number of surviving copies: ensure a newer verified offsite copy exists first.
 Keep the backup root writable only by its operator; share it with no app identity.
+
+## Durable operator metadata
+
+`OPERATIONS_CATALOG` selects the SQLite operational metadata store. Compose tools
+write `/catalog/operations.sqlite3` on the separate durable `operations` volume;
+management mounts that volume read-only. Outside Compose, the default is
+`operations.sqlite3` in the backup root. Set the same explicit path for every
+backup, registration, rehearsal and retention job. Use a local filesystem with
+SQLite locking/fsync support, operator ownership, directory mode 0700 and file
+mode 0600. Back up this metadata store separately using a consistent SQLite backup
+or while all jobs are stopped. It contains no business rows or backup payloads.
+
+Successful publication records backup ID, database reference, UTC creation time,
+SHA-256 of the stored artifact, encryption flag, size in bytes and retention state.
+Filesystem publication and catalog commit are separate durable operations. If
+catalog writing fails, the CLI exits nonzero and the verified archive may already
+exist. After restoring storage access, register that archive (also supported for
+older tool-created archives):
+
+```sh
+python3 scripts/backup.py catalog-register /backups/<backup-id>
+```
+
+Registration verifies/decrypts the artifact first and is idempotent. Never register
+an untrusted archive. Preserve metadata after retention: `deletion_pending` is
+committed before deletion and `deleted` afterward. A crash between steps leaves
+`deletion_pending`; inspect the archive and reconcile the catalog under the job
+lock before claiming deletion complete. Do not recreate missing payloads merely
+to clear a pending record. Metadata can grow independently of archive retention.
+
+The restore CLI now requires a catalogued backup and persists a `running` report
+before attempting restoration. Normal failures persist `failed`, successful
+archive verification plus restore persists `passed`, and duration measures the
+attempt in seconds. Digest match is true after both checksums verify, false on a
+checksum mismatch, and null when verification could not determine it. A killed
+process may leave `running`; investigate it as incomplete, not successful.
+`isolated_target` identifies the new database in the operator-selected rehearsal
+cluster. The operator must select that isolated cluster using libpq environment;
+the tool cannot attest network isolation. No DSN is recorded. Reports cover
+archive integrity and database restoration only, not application correctness or
+production recovery. Application verification remains app-owned.

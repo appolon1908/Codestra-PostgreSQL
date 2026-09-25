@@ -37,3 +37,27 @@ Production TLS/mTLS and actual CIDR policy; OpenBao agent/lease/rotation integra
 offsite immutable backup and key recovery; app-owned RLS/grants/invariant checks;
 load/connection sizing; RPO/RTO measurement and release-image digest approval.
 These are deployment-specific prerequisites, not claims made by the dev suite.
+
+## Five operational missions — follow-up verification
+
+Implemented read-only catalog/rehearsal list and detail APIs and fixed connection,
+security and recovery probes. Added operator catalog registration, retention
+tombstones and durable rehearsal attempts, a separate read-only management volume,
+and OpenAPI 1.1.0 contracts. No business-data storage or HTTP mutation was added.
+
+- Ruff, 23 unit/contract tests, OpenAPI validation, Compose config validation,
+  Docker build and `git diff --check` pass.
+- Expanded real PostgreSQL integration passes with the same local host override
+  described above: connection totals/reservations, SSL/HBA reporting, role-policy
+  fingerprint changes, primary recovery status with unknown lag, catalog list/detail,
+  persisted successful rehearsal, operator failures, and metadata availability
+  while PostgreSQL is stopped. Existing plaintext and age-encrypted restore,
+  app-database isolation, exporter, corruption/overwrite refusal and restart
+  recovery checks still pass. Initialization order was exercised on a fresh volume.
+- The committed hardening was attempted first and failed on this host's
+  `no-new-privileges` executable restriction, reproduced with `postgres --version`.
+  No deployed hardening was relaxed. Temporary test containers/volumes were removed.
+
+A live standby/PITR topology, production certificate policy and an actual physical
+recovery are not claimed by these tests. Configuration observations deliberately
+return `recovery_proven: false`; application recovery validation stays app-owned.
