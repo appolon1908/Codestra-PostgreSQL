@@ -136,3 +136,125 @@ is the maximum observed interval, nullable when unavailable/idle; it is not zero
 by assumption. Standby receive/replay byte gap excludes upstream WAL not received.
 See PostgreSQL's [statistics semantics](https://www.postgresql.org/docs/17/monitoring-stats.html)
 and [recovery functions](https://www.postgresql.org/docs/17/functions-admin.html).
+
+## Missions 6–10: read-only readiness and operator evidence
+
+Apply `init/30-readiness.sql` as bootstrap administrator in `postgres` on existing
+installs after `20-operations.sql`; fresh volumes run both automatically. The
+migration is repeatable. Only `codestra_monitor` receives EXECUTE on the fixed
+functions. No new database membership, application CONNECT grant, arbitrary SQL,
+maintenance, restore, promotion or failover HTTP route is added. Continue routing
+cross-system access through Middleware V3 and the existing gateway/network policy.
+OpenBao remains credential authority; no credential belongs in imported metadata.
+
+| GET route | Meaning and limits |
+| --- | --- |
+| `/v1/postgresql/wal` | Archive configuration, counters/reset time, last success/failure, supported PostgreSQL target types and physical base-backup evidence age. |
+| `/v1/ownership[/id]` | Operations-only database/schema ownership claims; no application definitions. |
+| `/v1/postgresql/capacity` | Sum of non-template database sizes; table/index counts and relation bytes in `relation_scope`; operator storage samples and disk-free percentage. |
+| `/v1/storage-samples[/id]` | Timestamped aggregate samples for growth comparisons. |
+| `/v1/postgresql/maintenance` | Autovacuum policy, estimated vacuum/analyze backlog, statistics, database XID age and checkpoint counters. |
+| `/v1/base-backups[/id]` | Operator-attested physical base-backup metadata, distinct from logical dump catalog. |
+| `/v1/recovery-rehearsals[/id]` | Operator-attested failover/PITR rehearsal results, independent of existing logical restore reports. |
+
+A successful archiver counter, configured command or operator verification flag
+**does not prove recoverability**. WAL continuity, archive accessibility, keys,
+base-backup validity, timeline/target reachability and application invariants must
+be tested in isolation. `recoverability: unproven` and `recovery_proven: false`
+remain explicit even with a successful report. Supported target types describe
+PostgreSQL capability, not a configured or reachable target. Command text, archive
+locations, relation names and business rows are never returned by these probes.
+
+Database bytes cover all non-template databases, but PostgreSQL relation statistics
+are database-local. This API connects only to `postgres`; `relation_scope` makes
+that limit explicit. App owners must inspect their own database statistics through
+their governed access. Never interpret zero local backlog as a healthy app fleet.
+Backlog estimates use global threshold/scale-factor settings; table overrides,
+insert-triggered vacuum, disabled per-table autovacuum and statistics lag can make
+these estimates incomplete. Never-vacuumed/analyzed counts mean no recorded event
+since statistics reset, not necessarily maintenance failure. Checkpoint rates
+require successive samples with the same stats_reset. XID age spans databases.
+
+### Import operational metadata
+
+Run the restricted operator CLI locally or through the existing operator tools
+profile. Prepare an approved JSON record outside application databases and import
+it with `python3 -m scripts.readiness KIND /path/record.json`. With Compose:
+
+```sh
+docker compose run --rm -T --no-deps \
+  -v /absolute/path/record.json:/tmp/record.json:ro \
+  tools scripts/readiness.py ownership /tmp/record.json
+```
+
+The tools profile writes only the operations SQLite catalog for this command;
+management mounts it read-only and opens it with SQLite `mode=ro`. No network or
+PostgreSQL access is used by the importer. Record IDs are immutable and unique per
+kind. Exact field allowlists reject arbitrary payloads; dates require timezones
+and must not be future-dated. Read lists return the latest 100 records and flag
+truncation; base backups sort by completion time, others by created_at. Detail
+lookups retain access to older records. Missing/uninitialized metadata yields 503
+on metadata routes and explicit unknown/null evidence in otherwise healthy probes.
+Initialize the new metadata table by importing the first approved record. Do not
+fabricate empty evidence just to clear an unavailable alert.
+
+Ownership example (`schema_ref: "*"` reserves the whole database):
+
+```json
+{"id":"owner_001","created_at":"2026-09-24T00:00:00+00:00","database_ref":"identity","schema_ref":"public","owning_repository":"org/identity","service_id":"identity"}
+```
+
+The importer takes a SQLite write lock before checking claims. A repeated claim,
+a different owner for the same database/schema, or overlap with a database-wide
+claim fails without replacing existing evidence. Distinct databases/schemas may
+have different owners. Ownership transfer requires a reviewed operator catalog
+migration and retained audit evidence; there is no HTTP write or automatic transfer.
+
+Storage sample example:
+
+```json
+{"id":"capacity_001","created_at":"2026-09-24T00:00:00+00:00","database_bytes":104857600,"disk_free_percent":42.5,"scope_ref":"cluster_a/pgdata"}
+```
+
+An operator/host collector supplies actual database-byte totals and available-space
+percentage from the PostgreSQL data filesystem. Use available bytes/total bytes
+(e.g. statvfs f_bavail/f_blocks), not the management container filesystem. Import
+only samples for this runtime, keep a stable scope_ref, and compare growth only for
+matching scopes and timestamps. Separate WAL/tablespace mounts need their own host
+monitoring. The API reports the latest sample with `sample_age_seconds`; it does
+not collect live disk values or invent zeros when evidence is absent. Retained
+samples support byte differences over elapsed time; no background write sampler
+runs in the read-only management service.
+
+Physical base-backup example (a pg_dump is not eligible):
+
+```json
+{"id":"base_001","created_at":"2026-09-24T00:00:00+00:00","backup_ref":"physical_001","completed_at":"2026-09-23T23:00:00+00:00","verified":true,"wal_start":"0/1000000","wal_end":"0/2000000"}
+```
+
+`verified` is the operator's base-backup verification attestation, never a PITR
+proof. WAL references may be null when unavailable. Base-backup age is elapsed
+since the most recent reported physical backup completion; inspect its verified
+flag separately. No physical backup or remote restore command is executed here.
+
+Recovery rehearsal example:
+
+```json
+{"id":"recovery_001","created_at":"2026-09-24T00:00:00+00:00","scenario":"isolated_pitr_to_lsn","started_at":"2026-09-23T23:00:00+00:00","ended_at":"2026-09-23T23:00:20+00:00","rto_target_seconds":30,"duration_seconds":20,"data_integrity":"passed","wal_start":"0/1000000","wal_end":"0/2000000","outcome":"success"}
+```
+
+Record both successes and failures after a governed isolated rehearsal. Accepted
+integrity states are passed/failed/not_verified, and outcomes success/failure.
+Duration must match start/end within one second. `rto_met` requires success and a
+duration within the stated target. Operator attestation is not independently
+verified by the API. App-owned invariant checks must substantiate `passed`; archive
+checksum or restore command success alone does not. Existing `/v1/rehearsals`
+continues to report only logical archive/restore verification, which cannot be
+upgraded to application-integrity or PITR evidence. Store restricted supporting
+logs outside this catalog under the report ID. `live_failover_authorized` is always
+false. Live failover requires separate current Middleware/operator authority and
+OpenBao credentials; a stored report can never authorize it.
+
+Maintenance execution remains outside this API. Use existing governed operator
+procedures in an isolated environment if rehearsal is needed; no optional arbitrary
+VACUUM CLI or SQL HTTP executor was introduced.

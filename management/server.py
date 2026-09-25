@@ -6,15 +6,19 @@ import re
 import sqlite3
 import subprocess
 import time
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from scripts import catalog
+from scripts import catalog, readiness
 
 STARTED = time.monotonic()
 QUERY = "SELECT current_setting('server_version_num')::int, pg_is_in_recovery(), current_setting('max_connections')::int"
 
 
 OPERATIONS = {
+    "/v1/postgresql/wal": "SELECT codestra_ops.wal()",
+    "/v1/postgresql/capacity": "SELECT codestra_ops.capacity()",
+    "/v1/postgresql/maintenance": "SELECT codestra_ops.maintenance()",
     "/v1/postgresql/connections": "SELECT codestra_ops.connections()",
     "/v1/postgresql/security": "SELECT codestra_ops.security()",
     "/v1/postgresql/recovery": "SELECT codestra_ops.recovery()",
@@ -52,11 +56,147 @@ def probe():
         return {"reachable": False}
 
 
+def metadata_status(kind):
+    try:
+        return dict(readiness.evidence(kind), available=True)
+    except (OSError, ValueError, sqlite3.Error):
+        return {
+            "available": False,
+            "items": [],
+            "truncated": False,
+            "source": "operator_attested",
+            "live_failover_authorized": False,
+        }
+
+
+def age_seconds(value):
+    return max(0, (datetime.now(timezone.utc) - readiness.stamp(value)).total_seconds())
+
+
+def operational_status(path):
+    body = json.loads(query(OPERATIONS[path]))
+    if path.endswith("/wal"):
+        evidence = metadata_status("base-backups")
+        body["base_backup_evidence"] = evidence
+        body["last_archived_age_seconds"] = (
+            age_seconds(body["last_archived_at"])
+            if body.get("last_archived_at")
+            else None
+        )
+        body["base_backup_age_seconds"] = min(
+            (age_seconds(row["completed_at"]) for row in evidence["items"]),
+            default=None,
+        )
+        # pg_dump catalogs are deliberately excluded: logical backups cannot seed PITR.
+        body["recoverability"] = "unproven"
+        body["recovery_proven"] = False
+    if path.endswith("/capacity"):
+        evidence = metadata_status("storage-samples")
+        body["growth_samples"] = evidence
+        latest = evidence["items"][0] if evidence["items"] else None
+        body["disk_free_percent"] = latest["disk_free_percent"] if latest else None
+        body["sample_age_seconds"] = (
+            age_seconds(latest["created_at"]) if latest else None
+        )
+    return body
+
+
+def readiness_metrics():
+    output = ""
+    fields = {
+        "wal": (
+            "archive_mode_enabled",
+            "archive_transport_configured",
+            "archived_count",
+            "failed_count",
+            "last_archived_age_seconds",
+            "archive_failure_pending",
+            "base_backup_age_seconds",
+        ),
+        "capacity": (
+            "database_bytes",
+            "table_count",
+            "index_count",
+            "disk_free_percent",
+            "sample_age_seconds",
+        ),
+        "maintenance": (
+            "autovacuum_enabled",
+            "dead_tuple_estimate",
+            "modified_since_analyze_estimate",
+            "vacuum_backlog_estimate",
+            "analyze_backlog_estimate",
+            "never_vacuumed_tables",
+            "never_analyzed_tables",
+            "oldest_database_xid_age",
+            "freeze_max_age",
+            "checkpoints_timed",
+            "checkpoints_requested",
+        ),
+    }
+    for kind, keys in fields.items():
+        try:
+            values = operational_status("/v1/postgresql/" + kind)
+            available = True
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            sqlite3.Error,
+            subprocess.SubprocessError,
+        ):
+            values, available = {}, False
+        values["available"] = available
+        for key in (*keys, "available"):
+            value = values.get(key)
+            if value is not None:
+                name = f"codestra_postgresql_{kind}_{key}"
+                output += f"# HELP {name} Operational aggregate; see runbook for scope and thresholds.\n# TYPE {name} gauge\n{name} {float(value)}\n"
+    for kind in ("ownership", "recovery-rehearsals"):
+        evidence = metadata_status(kind)
+        name = "codestra_postgresql_" + kind.replace("-", "_") + "_available"
+        output += f"# HELP {name} Operator evidence readable.\n# TYPE {name} gauge\n{name} {int(evidence['available'])}\n"
+        if kind == "recovery-rehearsals" and evidence["items"]:
+            latest = evidence["items"][0]
+            measurements = {
+                "age_seconds": age_seconds(latest["ended_at"]),
+                "duration_seconds": latest["duration_seconds"],
+                "rto_met": latest["rto_met"],
+                "success": latest["outcome"] == "success",
+                "data_integrity_passed": latest["data_integrity"] == "passed",
+            }
+            for key, value in measurements.items():
+                metric = "codestra_postgresql_recovery_rehearsals_latest_" + key
+                output += f"# HELP {metric} Latest operator-attested rehearsal; never live failover authority.\n# TYPE {metric} gauge\n{metric} {float(value)}\n"
+    return output
+
+
 def response(path):
     if path in OPERATIONS:
         try:
-            return 200, json.loads(query(OPERATIONS[path])), "application/json"
-        except (OSError, ValueError, subprocess.SubprocessError):
+            return 200, operational_status(path), "application/json"
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            sqlite3.Error,
+            subprocess.SubprocessError,
+        ):
+            return 503, {"error": "unavailable"}, "application/json"
+    metadata = re.fullmatch(
+        r"/v1/(ownership|storage-samples|base-backups|recovery-rehearsals)(?:/([a-zA-Z0-9_-]{1,80}))?",
+        path,
+    )
+    if metadata:
+        try:
+            body = readiness.read(metadata[1], metadata[2])
+            return (
+                (200, body, "application/json")
+                if body is not None
+                else (404, {"error": "not_found"}, "application/json")
+            )
+        except (OSError, ValueError, sqlite3.Error):
             return 503, {"error": "unavailable"}, "application/json"
     match = re.fullmatch(r"/v1/(backups|rehearsals)(?:/([a-zA-Z0-9_-]{1,80}))?", path)
     if match:
@@ -84,6 +224,13 @@ def response(path):
                     "runtime.connections",
                     "runtime.security",
                     "runtime.recovery",
+                    "runtime.wal",
+                    "runtime.capacity",
+                    "runtime.maintenance",
+                    "operations.ownership",
+                    "operations.storage_samples",
+                    "operations.base_backups",
+                    "operations.recovery_rehearsals",
                 ],
                 "mutations": False,
                 "integration_authority": "Middleware V3",
@@ -119,7 +266,11 @@ def response(path):
                     f"# TYPE codestra_postgresql_catalog_{kind} gauge\n"
                     f"codestra_postgresql_catalog_{kind} {count}\n"
                 )
-            return 200, body, "text/plain; version=0.0.4; charset=utf-8"
+            return (
+                200,
+                body + readiness_metrics(),
+                "text/plain; version=0.0.4; charset=utf-8",
+            )
         return (
             (200 if ready else 503),
             {"status": "ready" if ready else "unavailable", "database": database},

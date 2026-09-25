@@ -56,3 +56,13 @@ without write access and calls three fixed, zero-argument PostgreSQL functions f
 aggregate connection, TLS/policy and recovery observations. This adds no shared
 business-data authority, application table access, arbitrary SQL API, cross-app
 writes, or HTTP restore/backup mutations. Middleware V3 retains integration authority.
+
+Missions 6–10 extend the fixed SECURITY DEFINER query boundary with WAL, capacity
+and maintenance aggregates. Database-local relation statistics explicitly name their
+scope; management receives no new app-database privileges. A strict local metadata
+importer appends ownership claims, storage samples, physical-backup attestations and
+recovery reports to the operations catalog. Ownership conflicts are serialized and
+rejected. Management's read-only mount and read-only SQLite connection remain intact.
+No registry entry defines app tables, no collector writes to an app database, and no
+status/report path authorizes maintenance, restore or failover. Middleware retains
+integration/decision authority and OpenBao retains secret authority.

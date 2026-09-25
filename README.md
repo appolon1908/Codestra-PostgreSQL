@@ -84,3 +84,10 @@ Operational APIs now include backup catalog and rehearsal list/detail under
 for existing-volume installation, field semantics and limitations, and the
 [backup metadata procedure](docs/backups.md#durable-operator-metadata) for catalog
 storage and reconciliation. Backup/restore actions remain operator CLI only.
+
+Missions 6–10 add read-only WAL/PITR readiness, an operations-only ownership registry,
+aggregate capacity and maintenance status, and operator-attested recovery rehearsal
+reports. See [the runbook](docs/runbook.md#missions-610-read-only-readiness-and-operator-evidence)
+for scope, JSON import examples and the existing-install SQL migration. Disk/growth
+and physical-backup evidence are supplied by operators; configuration and reports
+never imply proven recoverability or authorize live failover. OpenAPI is now 1.2.0.

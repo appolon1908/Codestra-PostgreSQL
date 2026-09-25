@@ -69,3 +69,36 @@ No database names, backup IDs, roles, or targets become metric labels. Alert on
 catalog unavailability separately from PostgreSQL readiness; use rehearsal reports
 to investigate stale/running/failed attempts. Configuration presence is not a
 recovery-success metric.
+
+## Missions 6–10
+
+Management metrics add `codestra_postgresql_{wal,capacity,maintenance}_available`;
+failed probes omit measurements instead of inventing zeros. Metadata availability
+for ownership/recovery rehearsal evidence is separate. No database/schema/service
+identifiers, row content or report IDs become metric labels. Counters from
+PostgreSQL are exposed as sampled gauges; account for stats resets when deriving
+rates. A stats endpoint can be available while operator evidence is absent.
+
+Suggested initial alert thresholds (tune to the deployment's RPO/RTO and load):
+
+- `wal_archive_mode_enabled == 0` or `wal_archive_transport_configured == 0` where
+  PITR policy requires archiving; `wal_archive_failure_pending == 1` for 5 minutes.
+- `wal_last_archived_age_seconds > 900` with expected write activity; idle databases
+  can legitimately archive less frequently. Missing age is unknown, not healthy.
+- `wal_base_backup_age_seconds > 86400` or absence when physical backups are required.
+- `capacity_disk_free_percent < 20` warning, `< 10` critical; also alert on missing
+  disk samples and `capacity_sample_age_seconds > 900`. Disk values are operator
+  samples for the scope in the API, not management-container free space.
+- Rising `capacity_database_bytes`; compare timestamped `/v1/storage-samples` with
+  matching scope before calculating growth. Relation counts are local to postgres.
+- `maintenance_autovacuum_enabled == 0`; sustained positive vacuum/analyze backlog
+  estimates; `maintenance_oldest_database_xid_age / maintenance_freeze_max_age > 0.8`.
+  Local zero backlog does not describe other databases. Inspect checkpoint requested
+  versus timed deltas and write/sync durations through the API.
+- `recovery_rehearsals_latest_success == 0`, `recovery_rehearsals_latest_rto_met == 0`,
+  or `recovery_rehearsals_latest_data_integrity_passed == 0`; flag stale/missing reports
+  according to rehearsal cadence via `recovery_rehearsals_latest_age_seconds`.
+
+All names above are prefixed `codestra_postgresql_`. Alerting is advisory; no metric,
+registry claim or rehearsal result is failover authorization. See the runbook for
+scope, evidence freshness and operator import contracts.

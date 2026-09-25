@@ -12,7 +12,9 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r requirements-dev.txt
-      - run: python -m unittest discover -s tests -v
+      - run: python -m ruff check management scripts tests
+      - run: python -m ruff format --check management scripts tests
+      - run: python -m pytest -q
       - run: python -m openapi_spec_validator openapi.yaml
       - run: python scripts/dev-secrets.py
       - run: docker compose config --quiet

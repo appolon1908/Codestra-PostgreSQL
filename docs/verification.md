@@ -61,3 +61,38 @@ and OpenAPI 1.1.0 contracts. No business-data storage or HTTP mutation was added
 A live standby/PITR topology, production certificate policy and an actual physical
 recovery are not claimed by these tests. Configuration observations deliberately
 return `recovery_proven: false`; application recovery validation stays app-owned.
+
+## Missions 6–10 — readiness and operator evidence
+
+Started only after Missions 1–5 were committed as `172b65f` and the worktree was
+clean, on the same `mission/face-id-middleware-integration-20260924` branch.
+
+- Ruff lint/format, 50 pytest unit/contract cases, OpenAPI 1.2.0 validation,
+  Compose configuration and Git whitespace checks pass. `make check` and the CI
+  template now run pytest (including function-based tests) and Ruff; their versions
+  are pinned in development requirements.
+- Docker build and expanded PostgreSQL 17 integration pass using the same temporary
+  host override described above. New checks cover WAL/capacity/maintenance response
+  schemas; monitor-only function privileges; repeatable migration; operator CLI
+  imports for ownership, samples, physical-backup and recovery evidence; conflicting
+  ownership rejection; null versus sampled disk status; unproven recovery despite
+  backup evidence; missing mutation routes; and persisted reports during DB outage.
+  Existing logical/encrypted restore and isolation checks also pass. Integration
+  records are synthetic metadata fixtures, not evidence of a real PITR/failover.
+- Unit tests additionally cover concurrent claim conflicts, database-wide overlap,
+  immutable record IDs, bounded lists, invalid/future timestamps, malformed WAL
+  references, nonfinite/out-of-range samples, duration consistency, success/failure
+  and RTO results, physical-backup completion ordering, UTC normalization, rehearsal
+  freshness based on end time, and missing-evidence/failed-probe behavior.
+- Committed hardening was attempted first and again failed on this Docker host.
+  A standalone `docker run --rm --security-opt no-new-privileges:true
+  postgres:17-bookworm postgres --version` reproduced `operation not permitted`.
+  Only the temporary integration override removed security_opt; committed Compose
+  was not changed. Disposable test projects and volumes are removed by the suite.
+
+No production disk sampling, physical recovery, standby promotion or app invariant
+verification was performed. Those remain operator/app-owned evidence, explicitly
+separate from configuration and never live failover authorization. Relation-level
+capacity and maintenance statistics remain scoped to `postgres` under the existing
+least-privilege connection policy; cluster-wide size/XID/checkpoint aggregates and
+operator sample scopes are identified in the API/runbook.

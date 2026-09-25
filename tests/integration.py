@@ -10,6 +10,9 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+import yaml
+from jsonschema import Draft202012Validator
+
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT = "codestra-pg-test-" + uuid.uuid4().hex[:10]
 ENV = dict(os.environ, MANAGEMENT_PORT="0")
@@ -83,6 +86,9 @@ try:
         "/v1/postgresql/connections",
         "/v1/postgresql/security",
         "/v1/postgresql/recovery",
+        "/v1/postgresql/wal",
+        "/v1/postgresql/capacity",
+        "/v1/postgresql/maintenance",
     ):
         assert get(path)[0] == 200, path
     assert get("/v1/postgresql/query")[0] == 404
@@ -122,6 +128,52 @@ try:
     recovery = json.loads(get("/v1/postgresql/recovery")[1])
     assert recovery["role"] == "primary" and recovery["recovery_proven"] is False
     assert recovery["replication_lag_seconds"] is None
+    contract = yaml.safe_load((ROOT / "openapi.yaml").read_text())
+
+    def validate_status(path):
+        status, raw = get(path)
+        assert status == 200, (path, status)
+        body = json.loads(raw)
+        schema = contract["paths"][path]["get"]["responses"]["200"]["content"][
+            "application/json"
+        ]["schema"]
+        Draft202012Validator(schema).validate(body)
+        return body
+
+    for name in ("wal", "capacity", "maintenance"):
+        validate_status("/v1/postgresql/" + name)
+        assert (
+            sql(
+                f"SELECT has_function_privilege('policy_fixture', 'codestra_ops.{name}()', 'EXECUTE')",
+                "postgres",
+            )
+            == "f"
+        )
+        assert (
+            sql(
+                f"SELECT has_function_privilege('codestra_monitor', 'codestra_ops.{name}()', 'EXECUTE')",
+                "postgres",
+            )
+            == "t"
+        )
+    assert validate_status("/v1/postgresql/wal")["recoverability"] == "unproven"
+    assert validate_status("/v1/postgresql/capacity")["disk_free_percent"] is None
+    # Existing installations can apply this migration repeatedly.
+    compose(
+        "exec",
+        "-T",
+        "-u",
+        "postgres",
+        "postgres",
+        "psql",
+        "-X",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-d",
+        "postgres",
+        "-f",
+        "/docker-entrypoint-initdb.d/30-readiness.sql",
+    )
     assert get("/v1/backups")[0] == 503  # no catalog yet
     sql("CREATE DATABASE fixture", "postgres")
     sql(
@@ -249,11 +301,83 @@ try:
         )
         == "0"
     )
+    records = {
+        "ownership": {
+            "database_ref": "fixture",
+            "schema_ref": "public",
+            "owning_repository": "org/fixture",
+            "service_id": "fixture",
+        },
+        "storage-samples": {
+            "database_bytes": 1024,
+            "disk_free_percent": 42,
+            "scope_ref": "integration/pgdata",
+        },
+        "base-backups": {
+            "backup_ref": "operator_fixture",
+            "completed_at": "2026-01-01T00:00:00+00:00",
+            "verified": True,
+            "wal_start": "0/100",
+            "wal_end": "0/200",
+        },
+        "recovery-rehearsals": {
+            "scenario": "test_metadata_only",
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "ended_at": "2026-01-01T00:00:20+00:00",
+            "rto_target_seconds": 30,
+            "duration_seconds": 20,
+            "data_integrity": "not_verified",
+            "wal_start": None,
+            "wal_end": None,
+            "outcome": "failure",
+        },
+    }
+    for kind, row in records.items():
+        row.update(id="integration", created_at="2026-01-01T00:00:00+00:00")
+        compose(
+            "run",
+            "--rm",
+            "-T",
+            "--no-deps",
+            "tools",
+            "-c",
+            "import json, subprocess; from pathlib import Path; "
+            + f"Path('/tmp/record.json').write_text({json.dumps(row)!r}); "
+            + f"subprocess.run(['python3', 'scripts/readiness.py', {kind!r}, '/tmp/record.json'], check=True)",
+        )
+        validate_status("/v1/" + kind)
+        assert get("/v1/" + kind + "/integration")[0] == 200
+    rejected = compose(
+        "run",
+        "--rm",
+        "-T",
+        "--no-deps",
+        "tools",
+        "-c",
+        "from scripts import readiness; "
+        + f"readiness.register('ownership', {dict(records['ownership'], id='conflict', service_id='other')!r})",
+        ok=False,
+    )
+    assert rejected.returncode != 0
+    wal = validate_status("/v1/postgresql/wal")
+    assert wal["base_backup_age_seconds"] > 0 and wal["recovery_proven"] is False
+    assert validate_status("/v1/postgresql/capacity")["disk_free_percent"] == 42
+    assert "codestra_postgresql_capacity_disk_free_percent 42.0" in get("/metrics")[1]
+    for action in ("restore", "vacuum", "failover", "promote"):
+        assert get("/v1/postgresql/" + action)[0] == 404
     compose("stop", "postgres")
     assert get("/healthz")[0] == 200
     assert get("/v1/backups")[0] == 200  # independent of business DB availability
-    for path in ("connections", "security", "recovery"):
+    for path in (
+        "connections",
+        "security",
+        "recovery",
+        "wal",
+        "capacity",
+        "maintenance",
+    ):
         assert get("/v1/postgresql/" + path)[0] == 503
+    assert get("/v1/recovery-rehearsals")[0] == 200
     assert get("/readyz")[0] == 503
     assert get("/v1/postgresql/status")[0] == 503
     assert "codestra_postgresql_ready 0" in get("/metrics")[1]
@@ -265,7 +389,7 @@ try:
     else:
         raise AssertionError("readiness did not recover")
     print(
-        "PASS: startup, operational APIs, catalog/reports, policy fingerprints, least privilege, version, app isolation, exporter, backup verification, encrypted restore rehearsal, overwrite refusal, corruption refusal, outage/recovery"
+        "PASS: startup, operational APIs, WAL/capacity/maintenance contracts, ownership conflicts, recovery evidence, migration reapplication, catalog/reports, policy fingerprints, least privilege, version, app isolation, exporter, backup verification, encrypted restore rehearsal, overwrite refusal, corruption refusal, outage/recovery"
     )
 finally:
     # Only this run's randomly named project/volumes are removed.

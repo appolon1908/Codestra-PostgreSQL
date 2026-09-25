@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Codestra PostgreSQL Management API
-  version: 1.1.0
+  version: 1.2.0
   description: Read-only runtime boundary. Internal use only; cross-system access
     via Caddy/Kong/Middleware V3. No application records or mutation endpoints. Network
     isolation is mandatory; this dev API has no application authentication.
@@ -154,6 +154,13 @@ paths:
                       - runtime.connections
                       - runtime.security
                       - runtime.recovery
+                      - runtime.wal
+                      - runtime.capacity
+                      - runtime.maintenance
+                      - operations.ownership
+                      - operations.storage_samples
+                      - operations.base_backups
+                      - operations.recovery_rehearsals
                   mutations:
                     const: false
                   integration_authority:
@@ -661,3 +668,571 @@ paths:
           content:
             application/json:
               schema: *id004
+  /v1/ownership:
+    get:
+      operationId: v1_ownership
+      description: Operator-attested metadata only. Bounded to 100 newest records;
+        truncated means more exist. No mutation or authorization implied.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - items
+                - truncated
+                properties:
+                  items:
+                    type: array
+                    maxItems: 100
+                    items: &id010
+                      type: object
+                      additionalProperties: false
+                      required:
+                      - id
+                      - created_at
+                      - database_ref
+                      - schema_ref
+                      - owning_repository
+                      - service_id
+                      properties:
+                        id: &id012
+                          type: string
+                          pattern: ^[A-Za-z0-9_-]{1,80}$
+                        created_at: &id013
+                          type: string
+                          format: date-time
+                        database_ref: &id009
+                          type: string
+                          pattern: ^[A-Za-z0-9_./:-]{1,160}$
+                        schema_ref:
+                          type: string
+                          pattern: ^(\*|[A-Za-z0-9_./:-]{1,160})$
+                        owning_repository: *id009
+                        service_id: *id009
+                  truncated: &id014
+                    type: boolean
+        '503':
+          description: Status or metadata unavailable
+          content:
+            application/json:
+              schema: &id011
+                type: object
+                additionalProperties: false
+                required:
+                - error
+                properties:
+                  error:
+                    enum:
+                    - unavailable
+                    - not_found
+  /v1/ownership/{id}:
+    get:
+      operationId: v1_ownership_detail
+      description: Operator-attested record. A rehearsal outcome never authorizes
+        live failover.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: *id010
+        '503':
+          description: Status or metadata unavailable
+          content:
+            application/json:
+              schema: *id011
+        '404':
+          description: No record
+          content:
+            application/json:
+              schema: *id011
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: *id012
+  /v1/storage-samples:
+    get:
+      operationId: v1_storage_samples
+      description: Operator-attested metadata only. Bounded to 100 newest records;
+        truncated means more exist. No mutation or authorization implied.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - items
+                - truncated
+                properties:
+                  items:
+                    type: array
+                    maxItems: 100
+                    items: &id015
+                      type: object
+                      additionalProperties: false
+                      required:
+                      - id
+                      - created_at
+                      - database_bytes
+                      - disk_free_percent
+                      - scope_ref
+                      properties:
+                        id: *id012
+                        created_at: *id013
+                        database_bytes:
+                          type: integer
+                          minimum: 0
+                        disk_free_percent:
+                          type: number
+                          minimum: 0
+                          maximum: 100
+                        scope_ref: *id009
+                  truncated: *id014
+        '503':
+          description: Status or metadata unavailable
+          content:
+            application/json:
+              schema: *id011
+  /v1/storage-samples/{id}:
+    get:
+      operationId: v1_storage_samples_detail
+      description: Operator-attested record. A rehearsal outcome never authorizes
+        live failover.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: *id015
+        '503':
+          description: Status or metadata unavailable
+          content:
+            application/json:
+              schema: *id011
+        '404':
+          description: No record
+          content:
+            application/json:
+              schema: *id011
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: *id012
+  /v1/base-backups:
+    get:
+      operationId: v1_base_backups
+      description: Operator-attested metadata only. Bounded to 100 newest records;
+        truncated means more exist. No mutation or authorization implied.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - items
+                - truncated
+                properties:
+                  items:
+                    type: array
+                    maxItems: 100
+                    items: &id017
+                      type: object
+                      additionalProperties: false
+                      required:
+                      - id
+                      - created_at
+                      - backup_ref
+                      - completed_at
+                      - verified
+                      - wal_start
+                      - wal_end
+                      properties:
+                        id: *id012
+                        created_at: *id013
+                        backup_ref: *id009
+                        completed_at: *id013
+                        verified: *id014
+                        wal_start: &id016
+                          type:
+                          - string
+                          - 'null'
+                          pattern: ^[0-9A-F]{1,8}/[0-9A-F]{1,8}$
+                        wal_end: *id016
+                  truncated: *id014
+        '503':
+          description: Status or metadata unavailable
+          content:
+            application/json:
+              schema: *id011
+  /v1/base-backups/{id}:
+    get:
+      operationId: v1_base_backups_detail
+      description: Operator-attested record. A rehearsal outcome never authorizes
+        live failover.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: *id017
+        '503':
+          description: Status or metadata unavailable
+          content:
+            application/json:
+              schema: *id011
+        '404':
+          description: No record
+          content:
+            application/json:
+              schema: *id011
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: *id012
+  /v1/recovery-rehearsals:
+    get:
+      operationId: v1_recovery_rehearsals
+      description: Operator-attested metadata only. Bounded to 100 newest records;
+        truncated means more exist. No mutation or authorization implied.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - items
+                - truncated
+                properties:
+                  items:
+                    type: array
+                    maxItems: 100
+                    items: &id019
+                      type: object
+                      additionalProperties: false
+                      required:
+                      - id
+                      - created_at
+                      - scenario
+                      - started_at
+                      - ended_at
+                      - rto_target_seconds
+                      - duration_seconds
+                      - data_integrity
+                      - wal_start
+                      - wal_end
+                      - outcome
+                      - rto_met
+                      - live_failover_authorized
+                      properties:
+                        id: *id012
+                        created_at: *id013
+                        scenario: *id009
+                        started_at: *id013
+                        ended_at: *id013
+                        rto_target_seconds: &id018
+                          type: number
+                          minimum: 0
+                        duration_seconds: *id018
+                        data_integrity:
+                          enum:
+                          - passed
+                          - failed
+                          - not_verified
+                        wal_start: *id016
+                        wal_end: *id016
+                        outcome:
+                          enum:
+                          - success
+                          - failure
+                        rto_met: *id014
+                        live_failover_authorized:
+                          const: false
+                  truncated: *id014
+        '503':
+          description: Status or metadata unavailable
+          content:
+            application/json:
+              schema: *id011
+  /v1/recovery-rehearsals/{id}:
+    get:
+      operationId: v1_recovery_rehearsals_detail
+      description: Operator-attested record. A rehearsal outcome never authorizes
+        live failover.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: *id019
+        '503':
+          description: Status or metadata unavailable
+          content:
+            application/json:
+              schema: *id011
+        '404':
+          description: No record
+          content:
+            application/json:
+              schema: *id011
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: *id012
+  /v1/postgresql/wal:
+    get:
+      operationId: v1_postgresql_wal
+      description: Configuration and archiver statistics do not prove WAL continuity,
+        usable backups or recoverability. Base-backup age uses operator-attested physical
+        backup completion times, excluding logical dump catalog. Evidence may be unavailable.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - archive_mode_enabled
+                - archive_transport_configured
+                - wal_level
+                - restore_command_configured
+                - recovery_target_types_supported
+                - archived_count
+                - failed_count
+                - last_archived_at
+                - last_failed_at
+                - stats_reset
+                - archive_failure_pending
+                - recovery_proven
+                - base_backup_evidence
+                - base_backup_age_seconds
+                - recoverability
+                - last_archived_age_seconds
+                properties:
+                  archive_mode_enabled: *id014
+                  archive_transport_configured: *id014
+                  wal_level: &id021
+                    type: string
+                  restore_command_configured: *id014
+                  recovery_target_types_supported:
+                    type: array
+                    items:
+                      enum:
+                      - time
+                      - lsn
+                      - name
+                      - xid
+                      - immediate
+                  archived_count:
+                    type: integer
+                    minimum: 0
+                  failed_count:
+                    type: integer
+                    minimum: 0
+                  last_archived_at: &id020
+                    type:
+                    - string
+                    - 'null'
+                    format: date-time
+                  last_failed_at: *id020
+                  stats_reset: *id020
+                  archive_failure_pending: *id014
+                  recovery_proven:
+                    const: false
+                  base_backup_evidence:
+                    type: object
+                    additionalProperties: false
+                    required:
+                    - items
+                    - truncated
+                    - available
+                    - source
+                    - live_failover_authorized
+                    properties:
+                      items:
+                        type: array
+                        maxItems: 100
+                        items: *id017
+                      truncated: *id014
+                      available: *id014
+                      source:
+                        const: operator_attested
+                      live_failover_authorized:
+                        const: false
+                  base_backup_age_seconds: &id022
+                    type:
+                    - number
+                    - 'null'
+                    minimum: 0
+                  recoverability:
+                    const: unproven
+                  last_archived_age_seconds:
+                    type:
+                    - number
+                    - 'null'
+                    minimum: 0
+        '503':
+          description: Status or metadata unavailable
+          content:
+            application/json:
+              schema: *id011
+  /v1/postgresql/capacity:
+    get:
+      operationId: v1_postgresql_capacity
+      description: Database bytes aggregate non-template databases. Relation counts/bytes
+        cover only relation_scope (postgres). Disk percentage is the newest operator
+        sample for the scope_ref given, never the management container filesystem.
+        Growth comparisons require matching scope. Unknown is null.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - database_count
+                - database_bytes
+                - relation_scope
+                - table_count
+                - index_count
+                - relation_bytes
+                - growth_samples
+                - disk_free_percent
+                - sample_age_seconds
+                properties:
+                  database_count:
+                    type: integer
+                    minimum: 0
+                  database_bytes: *id018
+                  relation_scope: *id021
+                  table_count:
+                    type: integer
+                    minimum: 0
+                  index_count:
+                    type: integer
+                    minimum: 0
+                  relation_bytes: *id018
+                  growth_samples:
+                    type: object
+                    additionalProperties: false
+                    required:
+                    - items
+                    - truncated
+                    - available
+                    - source
+                    - live_failover_authorized
+                    properties:
+                      items:
+                        type: array
+                        maxItems: 100
+                        items: *id015
+                      truncated: *id014
+                      available: *id014
+                      source:
+                        const: operator_attested
+                      live_failover_authorized:
+                        const: false
+                  disk_free_percent:
+                    type:
+                    - number
+                    - 'null'
+                    minimum: 0
+                    maximum: 100
+                  sample_age_seconds: *id022
+        '503':
+          description: Status or metadata unavailable
+          content:
+            application/json:
+              schema: *id011
+  /v1/postgresql/maintenance:
+    get:
+      operationId: v1_postgresql_maintenance
+      description: Relation health is limited to relation_scope; backlog estimates
+        use global autovacuum thresholds, excluding per-table overrides. XID age and
+        checkpoint counters are cluster-wide. Statistics resets invalidate rate comparisons.
+        No maintenance execution endpoint.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - relation_scope
+                - autovacuum_enabled
+                - dead_tuple_estimate
+                - modified_since_analyze_estimate
+                - vacuum_backlog_estimate
+                - analyze_backlog_estimate
+                - never_vacuumed_tables
+                - never_analyzed_tables
+                - oldest_database_xid_age
+                - freeze_max_age
+                - checkpoints_timed
+                - checkpoints_requested
+                - checkpoint_write_ms
+                - checkpoint_sync_ms
+                - stats_reset
+                properties:
+                  relation_scope: *id021
+                  autovacuum_enabled: *id014
+                  dead_tuple_estimate:
+                    type: integer
+                    minimum: 0
+                  modified_since_analyze_estimate:
+                    type: integer
+                    minimum: 0
+                  vacuum_backlog_estimate:
+                    type: integer
+                    minimum: 0
+                  analyze_backlog_estimate:
+                    type: integer
+                    minimum: 0
+                  never_vacuumed_tables:
+                    type: integer
+                    minimum: 0
+                  never_analyzed_tables:
+                    type: integer
+                    minimum: 0
+                  oldest_database_xid_age:
+                    type: integer
+                    minimum: 0
+                  freeze_max_age:
+                    type: integer
+                    minimum: 0
+                  checkpoints_timed:
+                    type: integer
+                    minimum: 0
+                  checkpoints_requested:
+                    type: integer
+                    minimum: 0
+                  checkpoint_write_ms: *id018
+                  checkpoint_sync_ms: *id018
+                  stats_reset: *id020
+        '503':
+          description: Status or metadata unavailable
+          content:
+            application/json:
+              schema: *id011
