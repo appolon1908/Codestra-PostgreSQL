@@ -178,7 +178,161 @@ def readiness_metrics():
     return output
 
 
-def response(path):
+
+MIDDLEWARE_OBSERVABILITY = {
+    "backup-catalog",
+    "restore-rehearsal",
+    "tls-security",
+    "replication-recovery",
+}
+BOUND_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+
+
+def _safe_evidence_refs(items):
+    refs = []
+    for item in items[:100]:
+        value = item.get("id")
+        if isinstance(value, str) and BOUND_REF.fullmatch(value) and value not in refs:
+            refs.append(value)
+    return refs
+
+
+def _projection_status(checks, evidence_refs):
+    values = tuple(checks.values())
+    if any(value is False for value in values):
+        return "not_ready"
+    if evidence_refs and values and all(value is True for value in values):
+        return "ready"
+    return "unknown"
+
+
+def middleware_observability(name, database_ref, tenant_id):
+    """Return one fixed, read-only Middleware evidence projection.
+
+    The database reference is opaque and never enters SQL. Tenant identity is
+    supplied only by the trusted internal request header and is echoed for
+    Middleware's binding check. Missing proof stays unknown rather than being
+    inferred from configuration presence.
+    """
+    if name not in MIDDLEWARE_OBSERVABILITY:
+        return 404, {"error": "not_found"}, "application/json"
+    if (
+        not isinstance(tenant_id, str)
+        or not BOUND_REF.fullmatch(tenant_id)
+        or not BOUND_REF.fullmatch(database_ref)
+    ):
+        return 400, {"error": "invalid_binding"}, "application/json"
+
+    checks = {}
+    evidence_refs = []
+
+    if name == "backup-catalog":
+        evidence = metadata_status("base-backups")
+        items = evidence.get("items", []) if evidence.get("available") else []
+        evidence_refs = _safe_evidence_refs(items)
+        latest = items[0] if items else {}
+        checks = {
+            "catalog_available": True if evidence.get("available") else None,
+            "encrypted": latest.get("encrypted") if items else None,
+            "offsite_verified": latest.get("offsite_verified") if items else None,
+        }
+    elif name == "restore-rehearsal":
+        evidence = metadata_status("recovery-rehearsals")
+        items = evidence.get("items", []) if evidence.get("available") else []
+        evidence_refs = _safe_evidence_refs(items)
+        latest = items[0] if items else {}
+        scenario = latest.get("scenario")
+        checks = {
+            "isolated_target": (
+                scenario.startswith("isolated") if isinstance(scenario, str) else None
+            ),
+            "restore_verified": (
+                latest.get("outcome") == "success" if items else None
+            ),
+            "application_verified": latest.get("application_verified") if items else None,
+        }
+    elif name == "tls-security":
+        try:
+            security = operational_status("/v1/postgresql/security")
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            sqlite3.Error,
+            subprocess.SubprocessError,
+        ):
+            security = {}
+        minimum = security.get("minimum_tls_version")
+        checks = {
+            "tls_required": (
+                bool(security.get("ssl_enabled"))
+                and minimum in {"TLSv1.2", "TLSv1.3"}
+                if security
+                else None
+            ),
+            # Fingerprints and a syntactically valid HBA file are evidence, but
+            # neither proves certificate validity or least-privilege review.
+            "certificate_valid": security.get("certificate_valid"),
+            "least_privilege_verified": security.get("least_privilege_verified"),
+        }
+        for key in ("pg_hba_policy_fingerprint", "role_policy_fingerprint"):
+            value = security.get(key)
+            if isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value):
+                evidence_refs.append(f"{key.replace('_fingerprint', '')}_{value[:16]}")
+    else:
+        try:
+            recovery = operational_status("/v1/postgresql/recovery")
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            sqlite3.Error,
+            subprocess.SubprocessError,
+        ):
+            recovery = {}
+        rehearsal = metadata_status("recovery-rehearsals")
+        items = rehearsal.get("items", []) if rehearsal.get("available") else []
+        evidence_refs = _safe_evidence_refs(items)
+        latest = items[0] if items else {}
+        checks = {
+            # Replication health needs an explicit service decision/threshold;
+            # raw lag or replica count alone is not sufficient proof.
+            "replication_healthy": recovery.get("replication_healthy"),
+            "recovery_tested": (
+                latest.get("outcome") == "success"
+                and latest.get("data_integrity") == "passed"
+                if items
+                else None
+            ),
+            "rpo_met": latest.get("rpo_met") if items else None,
+            "rto_met": latest.get("rto_met") if items else None,
+        }
+
+    return (
+        200,
+        {
+            "tenant_id": tenant_id,
+            "database_ref": database_ref,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "status": _projection_status(checks, evidence_refs),
+            "evidence_refs": evidence_refs,
+            "checks": checks,
+        },
+        "application/json",
+    )
+
+
+def response(path, tenant_id=None):
+    projection = re.fullmatch(
+        r"/internal/v1/observability/([a-z-]+)/([A-Za-z0-9][A-Za-z0-9_-]{0,127})",
+        path,
+    )
+    if projection:
+        return middleware_observability(projection[1], projection[2], tenant_id)
+    if path.startswith("/internal/v1/observability/"):
+        return 404, {"error": "not_found"}, "application/json"
     if path in OPERATIONS:
         try:
             return 200, operational_status(path), "application/json"
@@ -296,7 +450,10 @@ class Handler(BaseHTTPRequestHandler):
         self.connection.settimeout(5)
 
     def do_GET(self):
-        status, body, content_type = response(self.path)
+        status, body, content_type = response(
+            self.path,
+            tenant_id=self.headers.get("X-Tenant-ID"),
+        )
         encoded = (json.dumps(body) if isinstance(body, dict) else body).encode()
         self.send_response(status)
         self.send_header("Content-Type", content_type)
