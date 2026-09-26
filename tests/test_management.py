@@ -35,7 +35,6 @@ class ManagementTests(unittest.TestCase):
         ):
             self.assertEqual(server.probe(), {"reachable": False})
 
-
     def test_pool_isolation_is_bounded_reference_only(self):
         import json
 
