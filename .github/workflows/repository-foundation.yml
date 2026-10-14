@@ -25,9 +25,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if git grep -nE '^(<<<<<<< |>>>>>>> )' -- . ':!*.md' ':!*.txt'; then
+          scan_status=0
+          git grep -nI -E '^(<<<<<<< |=======($| )|>>>>>>> )' -- . || scan_status=$?
+          if [ "$scan_status" -eq 0 ]; then
             echo 'Unresolved merge markers found'
             exit 1
+          elif [ "$scan_status" -ne 1 ]; then
+            echo 'Merge marker scan failed'
+            exit "$scan_status"
           fi
       - name: Validate tracked JSON and TOML metadata
         shell: bash
