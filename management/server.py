@@ -57,9 +57,12 @@ def probe():
         return {"reachable": False}
 
 
-def metadata_status(kind):
+def metadata_status(kind, *, tenant_id=None, database_ref=None):
     try:
-        return dict(readiness.evidence(kind), available=True)
+        return dict(
+            readiness.evidence(kind, tenant_id=tenant_id, database_ref=database_ref),
+            available=True,
+        )
     except (OSError, ValueError, sqlite3.Error):
         return {
             "available": False,
@@ -178,7 +181,157 @@ def readiness_metrics():
     return output
 
 
-def response(path):
+MIDDLEWARE_OBSERVABILITY = {
+    "backup-catalog",
+    "restore-rehearsal",
+    "tls-security",
+    "replication-recovery",
+}
+BOUND_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+PROJECTION_MAX_AGE_SECONDS = 86400
+
+
+def _projection_evidence(kind, tenant_id, database_ref):
+    evidence = metadata_status(kind, tenant_id=tenant_id, database_ref=database_ref)
+    # Check stored bindings again at this boundary; never trust caller echoes.
+    time_key = "completed_at" if kind == "base-backups" else "ended_at"
+    items = []
+    for item in evidence.get("items", []) if evidence.get("available") else []:
+        if (
+            item.get("tenant_id") != tenant_id
+            or item.get("database_ref") != database_ref
+        ):
+            continue
+        try:
+            observed = readiness.stamp(item[time_key])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if (
+            datetime.now(timezone.utc) - observed
+        ).total_seconds() <= PROJECTION_MAX_AGE_SECONDS:
+            items.append(item)
+    return items
+
+
+def _safe_evidence_refs(items):
+    refs = []
+    for item in items[:100]:
+        value = item.get("id")
+        if isinstance(value, str) and BOUND_REF.fullmatch(value) and value not in refs:
+            refs.append(value)
+    return refs
+
+
+def _projection_status(checks, evidence_refs):
+    values = tuple(checks.values())
+    if any(value is False for value in values):
+        return "not_ready"
+    if evidence_refs and values and all(value is True for value in values):
+        return "ready"
+    return "unknown"
+
+
+def middleware_observability(name, database_ref, tenant_id):
+    """Return one fixed, read-only Middleware evidence projection.
+
+    The database reference is opaque and never enters SQL. Tenant identity is
+    supplied only by the trusted internal request header and is echoed for
+    Middleware's binding check. Missing proof stays unknown rather than being
+    inferred from configuration presence.
+    """
+    if name not in MIDDLEWARE_OBSERVABILITY:
+        return 404, {"error": "not_found"}, "application/json"
+    if (
+        not isinstance(tenant_id, str)
+        or not BOUND_REF.fullmatch(tenant_id)
+        or not BOUND_REF.fullmatch(database_ref)
+    ):
+        return 400, {"error": "invalid_binding"}, "application/json"
+
+    checks = {}
+    evidence_refs = []
+    observed_at = datetime.now(timezone.utc).isoformat()
+
+    if name == "backup-catalog":
+        items = _projection_evidence("base-backups", tenant_id, database_ref)
+        latest = items[0] if items else {}
+        evidence_refs = _safe_evidence_refs(items[:1])
+        observed_at = latest.get("completed_at", observed_at)
+        checks = {
+            "catalog_available": latest.get("verified") if items else None,
+            "encrypted": latest.get("encrypted") if items else None,
+            "offsite_verified": latest.get("offsite_verified") if items else None,
+        }
+    elif name == "restore-rehearsal":
+        items = _projection_evidence("recovery-rehearsals", tenant_id, database_ref)
+        latest = items[0] if items else {}
+        evidence_refs = _safe_evidence_refs(items[:1])
+        observed_at = latest.get("ended_at", observed_at)
+        scenario = latest.get("scenario")
+        checks = {
+            "isolated_target": (
+                scenario.startswith("isolated") if isinstance(scenario, str) else None
+            ),
+            "restore_verified": (
+                latest.get("outcome") == "success"
+                and latest.get("data_integrity") == "passed"
+                if items
+                else None
+            ),
+            "application_verified": latest.get("application_verified")
+            if items
+            else None,
+        }
+    elif name == "tls-security":
+        # Cluster configuration is not proof of this tenant/database's policy.
+        # No scoped TLS/certificate attestation producer exists yet.
+        checks = {
+            "tls_required": None,
+            "certificate_valid": None,
+            "least_privilege_verified": None,
+        }
+    else:
+        items = _projection_evidence("recovery-rehearsals", tenant_id, database_ref)
+        latest = items[0] if items else {}
+        evidence_refs = _safe_evidence_refs(items[:1])
+        observed_at = latest.get("ended_at", observed_at)
+        checks = {
+            # Replication health needs an explicit service decision/threshold;
+            # raw lag or replica count alone is not sufficient proof.
+            "replication_healthy": None,
+            "recovery_tested": (
+                latest.get("outcome") == "success"
+                and latest.get("data_integrity") == "passed"
+                if items
+                else None
+            ),
+            "rpo_met": latest.get("rpo_met") if items else None,
+            "rto_met": latest.get("rto_met") if items else None,
+        }
+
+    return (
+        200,
+        {
+            "tenant_id": tenant_id,
+            "database_ref": database_ref,
+            "observed_at": observed_at,
+            "status": _projection_status(checks, evidence_refs),
+            "evidence_refs": evidence_refs,
+            "checks": checks,
+        },
+        "application/json",
+    )
+
+
+def response(path, tenant_id=None):
+    projection = re.fullmatch(
+        r"/internal/v1/observability/([a-z-]+)/([A-Za-z0-9][A-Za-z0-9_-]{0,127})",
+        path,
+    )
+    if projection:
+        return middleware_observability(projection[1], projection[2], tenant_id)
+    if path.startswith("/internal/v1/observability/"):
+        return 404, {"error": "not_found"}, "application/json"
     if path in OPERATIONS:
         try:
             return 200, operational_status(path), "application/json"
@@ -296,7 +449,10 @@ class Handler(BaseHTTPRequestHandler):
         self.connection.settimeout(5)
 
     def do_GET(self):
-        status, body, content_type = response(self.path)
+        status, body, content_type = response(
+            self.path,
+            tenant_id=self.headers.get("X-Tenant-ID"),
+        )
         encoded = (json.dumps(body) if isinstance(body, dict) else body).encode()
         self.send_response(status)
         self.send_header("Content-Type", content_type)

@@ -258,3 +258,39 @@ OpenBao credentials; a stored report can never authorize it.
 Maintenance execution remains outside this API. Use existing governed operator
 procedures in an isolated environment if rehearsal is needed; no optional arbitrary
 VACUUM CLI or SQL HTTP executor was introduced.
+# Scoped Middleware evidence projections
+
+OpenAPI 1.3.0 supports optional `tenant_id` and `database_ref` on operator-imported
+`base-backups` and `recovery-rehearsals`. Supply both identifiers together using
+the bounded Middleware reference format. Existing records remain readable, but
+unscoped records never attest a caller-selected tenant/database. The management
+process still opens the operations catalog read-only; this adds no SQL, grants,
+HTTP mutation, runtime routing or failover authority.
+
+Scoped backup records may include boolean `encrypted` and `offsite_verified`.
+Scoped rehearsal records may include boolean `application_verified` and `rpo_met`.
+These are operator attestations, not values inferred from configuration. Unknown
+or missing proof remains null. Extra fields and string-valued booleans are rejected.
+The importer uses the existing catalog; no separate registration engine is added.
+
+For example, append `"tenant_id": "tenant-a", "database_ref": "app-a",
+"encrypted": true, "offsite_verified": true` to a verified physical-backup import
+record, or append the two identifiers and `"application_verified": true` to a
+completed rehearsal record. Imports must carry actual UTC completion/end times;
+do not copy the examples as production evidence.
+
+Projection queries filter both stored identifiers before ordering and applying
+the 100-record bound. They use the newest matching source completion/end time,
+and only records completed within the last 24 hours are eligible. `observed_at`
+is that source timestamp. Re-reading old evidence cannot refresh it. If there is
+no eligible record, all checks are null, references are empty and status is
+unknown; its timestamp is evaluation time. Backup readiness also requires
+`verified`; restore verification requires successful outcome **and** passed data
+integrity. Application verification remains a separate explicit attestation.
+
+Cluster-wide TLS/security and replication observations have no authoritative
+tenant/database binding. The scoped TLS projection therefore returns unknown,
+and scoped replication health remains null, until an appropriate scoped proof
+producer is implemented and reviewed. Raw operational endpoints retain their
+existing cluster scope. Never treat caller identifiers or global fingerprints
+as proof of a tenant's policy or permission.

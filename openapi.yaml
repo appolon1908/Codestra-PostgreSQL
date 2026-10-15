@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Codestra PostgreSQL Management API
-  version: 1.2.0
+  version: 1.3.0
   description: Read-only runtime boundary. Internal use only; cross-system access
     via Caddy/Kong/Middleware V3. No application records or mutation endpoints. Network
     isolation is mandatory; this dev API has no application authentication.
@@ -947,6 +947,12 @@ paths:
                         backup_ref: *id009
                         completed_at: *id013
                         verified: *id014
+                        tenant_id: &bound_ref
+                          type: string
+                          pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'
+                        database_ref: *bound_ref
+                        encrypted: *id014
+                        offsite_verified: *id014
                         wal_start: &id016
                           type:
                           - string
@@ -1044,6 +1050,10 @@ paths:
                           - success
                           - failure
                         rto_met: *id014
+                        tenant_id: *bound_ref
+                        database_ref: *bound_ref
+                        application_verified: *id014
+                        rpo_met: *id014
                         live_failover_authorized:
                           const: false
                   truncated: *id014
@@ -1319,3 +1329,208 @@ paths:
           content:
             application/json:
               schema: *id011
+
+  /internal/v1/observability/backup-catalog/{database_ref}:
+    get:
+      operationId: middlewareBackupCatalogReadback
+      description: Internal Middleware-only, tenant-bound backup evidence projection. Never accepts SQL or a caller URL.
+      parameters:
+      - $ref: '#/components/parameters/MiddlewareTenant'
+      - $ref: '#/components/parameters/MiddlewareDatabaseRef'
+      responses:
+        '200':
+          description: Bounded read-only evidence. Missing proof is reported as unknown.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MiddlewareBackupCatalogReadback'
+        '400':
+          description: Invalid tenant/database binding.
+        '404':
+          description: Unknown or malformed internal readback route.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [error]
+                properties:
+                  error:
+                    const: not_found
+  /internal/v1/observability/restore-rehearsal/{database_ref}:
+    get:
+      operationId: middlewareRestoreRehearsalReadback
+      description: Internal Middleware-only, tenant-bound restore rehearsal evidence projection. Never authorizes failover.
+      parameters:
+      - $ref: '#/components/parameters/MiddlewareTenant'
+      - $ref: '#/components/parameters/MiddlewareDatabaseRef'
+      responses:
+        '200':
+          description: Bounded read-only evidence. Missing proof is reported as unknown.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MiddlewareRestoreRehearsalReadback'
+        '400':
+          description: Invalid tenant/database binding.
+        '404':
+          description: Unknown or malformed internal readback route.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [error]
+                properties:
+                  error:
+                    const: not_found
+  /internal/v1/observability/tls-security/{database_ref}:
+    get:
+      operationId: middlewareTlsSecurityReadback
+      description: Internal Middleware-only TLS/security projection. All checks remain null until a scoped attestation producer exists; cluster configuration and fingerprints cannot attest a caller-selected database.
+      parameters:
+      - $ref: '#/components/parameters/MiddlewareTenant'
+      - $ref: '#/components/parameters/MiddlewareDatabaseRef'
+      responses:
+        '200':
+          description: Bounded read-only evidence. Unproven checks remain null.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MiddlewareTlsSecurityReadback'
+        '400':
+          description: Invalid tenant/database binding.
+        '404':
+          description: Unknown or malformed internal readback route.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [error]
+                properties:
+                  error:
+                    const: not_found
+  /internal/v1/observability/replication-recovery/{database_ref}:
+    get:
+      operationId: middlewareReplicationRecoveryReadback
+      description: Internal Middleware-only replication/recovery projection. Only matching tenant/database attestations completed within 24 hours contribute evidence; unscoped live replication health remains null. Live failover is never authorized by this endpoint.
+      parameters:
+      - $ref: '#/components/parameters/MiddlewareTenant'
+      - $ref: '#/components/parameters/MiddlewareDatabaseRef'
+      responses:
+        '200':
+          description: Bounded read-only evidence. RPO/health remain unknown without explicit evidence.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MiddlewareReplicationRecoveryReadback'
+        '400':
+          description: Invalid tenant/database binding.
+        '404':
+          description: Unknown or malformed internal readback route.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [error]
+                properties:
+                  error:
+                    const: not_found
+components:
+  parameters:
+    MiddlewareTenant:
+      name: X-Tenant-ID
+      in: header
+      required: true
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'
+    MiddlewareDatabaseRef:
+      name: database_ref
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'
+  schemas:
+    MiddlewareReadbackBase:
+      type: object
+      description: Only attestations matching both stored tenant and database identifiers and completed within 24 hours are used. Legacy unscoped records remain available on operational APIs but never contribute projection proof. An unknown response with no evidence describes no verified binding.
+      required: [tenant_id, database_ref, observed_at, status, evidence_refs, checks]
+      properties:
+        tenant_id:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'
+        database_ref:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'
+        observed_at:
+          type: string
+          format: date-time
+          description: Source completion/end timestamp for the selected evidence; evaluation time only when evidence_refs is empty and status is unknown.
+        status:
+          enum: [ready, not_ready, unknown]
+        evidence_refs:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items:
+            type: string
+            pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'
+        checks:
+          type: object
+    MiddlewareBackupCatalogReadback:
+      allOf:
+      - $ref: '#/components/schemas/MiddlewareReadbackBase'
+      - type: object
+        properties:
+          checks:
+            type: object
+            additionalProperties: false
+            required: [catalog_available, encrypted, offsite_verified]
+            properties:
+              catalog_available: {type: [boolean, 'null']}
+              encrypted: {type: [boolean, 'null']}
+              offsite_verified: {type: [boolean, 'null']}
+    MiddlewareRestoreRehearsalReadback:
+      allOf:
+      - $ref: '#/components/schemas/MiddlewareReadbackBase'
+      - type: object
+        properties:
+          checks:
+            type: object
+            additionalProperties: false
+            required: [isolated_target, restore_verified, application_verified]
+            properties:
+              isolated_target: {type: [boolean, 'null']}
+              restore_verified: {type: [boolean, 'null']}
+              application_verified: {type: [boolean, 'null']}
+    MiddlewareTlsSecurityReadback:
+      allOf:
+      - $ref: '#/components/schemas/MiddlewareReadbackBase'
+      - type: object
+        properties:
+          checks:
+            type: object
+            additionalProperties: false
+            required: [tls_required, certificate_valid, least_privilege_verified]
+            properties:
+              tls_required: {type: [boolean, 'null']}
+              certificate_valid: {type: [boolean, 'null']}
+              least_privilege_verified: {type: [boolean, 'null']}
+    MiddlewareReplicationRecoveryReadback:
+      allOf:
+      - $ref: '#/components/schemas/MiddlewareReadbackBase'
+      - type: object
+        properties:
+          checks:
+            type: object
+            additionalProperties: false
+            required: [replication_healthy, recovery_tested, rpo_met, rto_met]
+            properties:
+              replication_healthy: {type: [boolean, 'null']}
+              recovery_tested: {type: [boolean, 'null']}
+              rpo_met: {type: [boolean, 'null']}
+              rto_met: {type: [boolean, 'null']}
