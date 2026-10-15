@@ -1,4 +1,5 @@
 import copy
+import re
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -248,3 +249,12 @@ def test_rehearsal_metric_age_uses_end_time(store):
     )
     assert abs(age - server.age_seconds(row["ended_at"])) < 1
     assert "codestra_postgresql_recovery_rehearsals_latest_rto_met 1.0" in metrics
+
+
+def test_all_operational_metrics_use_prometheus_text_names(store):
+    with patch.object(server, "query", return_value="{}"):
+        metrics = server.readiness_metrics()
+    for line in metrics.splitlines():
+        if line and not line.startswith("#"):
+            assert re.fullmatch(r"[a-zA-Z_:][a-zA-Z0-9_:]*", line.split()[0])
+    assert "codestra_postgresql_pool_isolation_available 1.0" in metrics

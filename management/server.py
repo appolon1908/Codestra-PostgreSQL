@@ -157,7 +157,7 @@ def readiness_metrics():
         for key in (*keys, "available"):
             value = values.get(key)
             if value is not None:
-                name = f"codestra_postgresql_{kind}_{key}"
+                name = f"codestra_postgresql_{kind.replace('-', '_')}_{key}"
                 output += f"# HELP {name} Operational aggregate; see runbook for scope and thresholds.\n# TYPE {name} gauge\n{name} {float(value)}\n"
     for kind in ("ownership", "recovery-rehearsals"):
         evidence = metadata_status(kind)
