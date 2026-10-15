@@ -1,0 +1,22 @@
+-- Example to adapt in the APP-OWNED provisioning/migration repository.
+-- Credentials issued separately using OpenBao database roles, never literal SQL.
+CREATE ROLE app_owner NOLOGIN;
+CREATE ROLE app_migrator LOGIN NOINHERIT CONNECTION LIMIT 2;
+CREATE ROLE app_runtime LOGIN CONNECTION LIMIT 20;
+GRANT app_owner TO app_migrator;
+CREATE DATABASE app_db OWNER app_owner;
+REVOKE ALL ON DATABASE app_db FROM PUBLIC;
+GRANT CONNECT ON DATABASE app_db TO app_runtime, app_migrator;
+\connect app_db
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
+SET ROLE app_owner;
+CREATE SCHEMA app AUTHORIZATION app_owner;
+GRANT USAGE ON SCHEMA app TO app_runtime;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA app TO app_runtime;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA app TO app_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA app
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA app
+  GRANT USAGE, SELECT ON SEQUENCES TO app_runtime;
+RESET ROLE;
+ALTER ROLE app_runtime IN DATABASE app_db SET search_path = app, pg_catalog;
