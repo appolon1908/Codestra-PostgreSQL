@@ -57,9 +57,12 @@ def probe():
         return {"reachable": False}
 
 
-def metadata_status(kind):
+def metadata_status(kind, *, tenant_id=None, database_ref=None):
     try:
-        return dict(readiness.evidence(kind), available=True)
+        return dict(
+            readiness.evidence(kind, tenant_id=tenant_id, database_ref=database_ref),
+            available=True,
+        )
     except (OSError, ValueError, sqlite3.Error):
         return {
             "available": False,
@@ -178,7 +181,6 @@ def readiness_metrics():
     return output
 
 
-
 MIDDLEWARE_OBSERVABILITY = {
     "backup-catalog",
     "restore-rehearsal",
@@ -186,6 +188,29 @@ MIDDLEWARE_OBSERVABILITY = {
     "replication-recovery",
 }
 BOUND_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+PROJECTION_MAX_AGE_SECONDS = 86400
+
+
+def _projection_evidence(kind, tenant_id, database_ref):
+    evidence = metadata_status(kind, tenant_id=tenant_id, database_ref=database_ref)
+    # Check stored bindings again at this boundary; never trust caller echoes.
+    time_key = "completed_at" if kind == "base-backups" else "ended_at"
+    items = []
+    for item in evidence.get("items", []) if evidence.get("available") else []:
+        if (
+            item.get("tenant_id") != tenant_id
+            or item.get("database_ref") != database_ref
+        ):
+            continue
+        try:
+            observed = readiness.stamp(item[time_key])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if (
+            datetime.now(timezone.utc) - observed
+        ).total_seconds() <= PROJECTION_MAX_AGE_SECONDS:
+            items.append(item)
+    return items
 
 
 def _safe_evidence_refs(items):
@@ -225,81 +250,55 @@ def middleware_observability(name, database_ref, tenant_id):
 
     checks = {}
     evidence_refs = []
+    observed_at = datetime.now(timezone.utc).isoformat()
 
     if name == "backup-catalog":
-        evidence = metadata_status("base-backups")
-        items = evidence.get("items", []) if evidence.get("available") else []
-        evidence_refs = _safe_evidence_refs(items)
+        items = _projection_evidence("base-backups", tenant_id, database_ref)
         latest = items[0] if items else {}
+        evidence_refs = _safe_evidence_refs(items[:1])
+        observed_at = latest.get("completed_at", observed_at)
         checks = {
-            "catalog_available": True if evidence.get("available") else None,
+            "catalog_available": latest.get("verified") if items else None,
             "encrypted": latest.get("encrypted") if items else None,
             "offsite_verified": latest.get("offsite_verified") if items else None,
         }
     elif name == "restore-rehearsal":
-        evidence = metadata_status("recovery-rehearsals")
-        items = evidence.get("items", []) if evidence.get("available") else []
-        evidence_refs = _safe_evidence_refs(items)
+        items = _projection_evidence("recovery-rehearsals", tenant_id, database_ref)
         latest = items[0] if items else {}
+        evidence_refs = _safe_evidence_refs(items[:1])
+        observed_at = latest.get("ended_at", observed_at)
         scenario = latest.get("scenario")
         checks = {
             "isolated_target": (
                 scenario.startswith("isolated") if isinstance(scenario, str) else None
             ),
             "restore_verified": (
-                latest.get("outcome") == "success" if items else None
-            ),
-            "application_verified": latest.get("application_verified") if items else None,
-        }
-    elif name == "tls-security":
-        try:
-            security = operational_status("/v1/postgresql/security")
-        except (
-            OSError,
-            ValueError,
-            KeyError,
-            TypeError,
-            sqlite3.Error,
-            subprocess.SubprocessError,
-        ):
-            security = {}
-        minimum = security.get("minimum_tls_version")
-        checks = {
-            "tls_required": (
-                bool(security.get("ssl_enabled"))
-                and minimum in {"TLSv1.2", "TLSv1.3"}
-                if security
+                latest.get("outcome") == "success"
+                and latest.get("data_integrity") == "passed"
+                if items
                 else None
             ),
-            # Fingerprints and a syntactically valid HBA file are evidence, but
-            # neither proves certificate validity or least-privilege review.
-            "certificate_valid": security.get("certificate_valid"),
-            "least_privilege_verified": security.get("least_privilege_verified"),
+            "application_verified": latest.get("application_verified")
+            if items
+            else None,
         }
-        for key in ("pg_hba_policy_fingerprint", "role_policy_fingerprint"):
-            value = security.get(key)
-            if isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value):
-                evidence_refs.append(f"{key.replace('_fingerprint', '')}_{value[:16]}")
+    elif name == "tls-security":
+        # Cluster configuration is not proof of this tenant/database's policy.
+        # No scoped TLS/certificate attestation producer exists yet.
+        checks = {
+            "tls_required": None,
+            "certificate_valid": None,
+            "least_privilege_verified": None,
+        }
     else:
-        try:
-            recovery = operational_status("/v1/postgresql/recovery")
-        except (
-            OSError,
-            ValueError,
-            KeyError,
-            TypeError,
-            sqlite3.Error,
-            subprocess.SubprocessError,
-        ):
-            recovery = {}
-        rehearsal = metadata_status("recovery-rehearsals")
-        items = rehearsal.get("items", []) if rehearsal.get("available") else []
-        evidence_refs = _safe_evidence_refs(items)
+        items = _projection_evidence("recovery-rehearsals", tenant_id, database_ref)
         latest = items[0] if items else {}
+        evidence_refs = _safe_evidence_refs(items[:1])
+        observed_at = latest.get("ended_at", observed_at)
         checks = {
             # Replication health needs an explicit service decision/threshold;
             # raw lag or replica count alone is not sufficient proof.
-            "replication_healthy": recovery.get("replication_healthy"),
+            "replication_healthy": None,
             "recovery_tested": (
                 latest.get("outcome") == "success"
                 and latest.get("data_integrity") == "passed"
@@ -315,7 +314,7 @@ def middleware_observability(name, database_ref, tenant_id):
         {
             "tenant_id": tenant_id,
             "database_ref": database_ref,
-            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "observed_at": observed_at,
             "status": _projection_status(checks, evidence_refs),
             "evidence_refs": evidence_refs,
             "checks": checks,

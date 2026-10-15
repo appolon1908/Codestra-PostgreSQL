@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Codestra PostgreSQL Management API
-  version: 1.2.0
+  version: 1.3.0
   description: Read-only runtime boundary. Internal use only; cross-system access
     via Caddy/Kong/Middleware V3. No application records or mutation endpoints. Network
     isolation is mandatory; this dev API has no application authentication.
@@ -947,6 +947,12 @@ paths:
                         backup_ref: *id009
                         completed_at: *id013
                         verified: *id014
+                        tenant_id: &bound_ref
+                          type: string
+                          pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'
+                        database_ref: *bound_ref
+                        encrypted: *id014
+                        offsite_verified: *id014
                         wal_start: &id016
                           type:
                           - string
@@ -1044,6 +1050,10 @@ paths:
                           - success
                           - failure
                         rto_met: *id014
+                        tenant_id: *bound_ref
+                        database_ref: *bound_ref
+                        application_verified: *id014
+                        rpo_met: *id014
                         live_failover_authorized:
                           const: false
                   truncated: *id014
@@ -1377,7 +1387,7 @@ paths:
   /internal/v1/observability/tls-security/{database_ref}:
     get:
       operationId: middlewareTlsSecurityReadback
-      description: Internal Middleware-only TLS/security evidence projection. Fingerprints never substitute for certificate or least-privilege proof.
+      description: Internal Middleware-only TLS/security projection. All checks remain null until a scoped attestation producer exists; cluster configuration and fingerprints cannot attest a caller-selected database.
       parameters:
       - $ref: '#/components/parameters/MiddlewareTenant'
       - $ref: '#/components/parameters/MiddlewareDatabaseRef'
@@ -1404,7 +1414,7 @@ paths:
   /internal/v1/observability/replication-recovery/{database_ref}:
     get:
       operationId: middlewareReplicationRecoveryReadback
-      description: Internal Middleware-only replication/recovery projection. Live failover is never authorized by this endpoint.
+      description: Internal Middleware-only replication/recovery projection. Only matching tenant/database attestations completed within 24 hours contribute evidence; unscoped live replication health remains null. Live failover is never authorized by this endpoint.
       parameters:
       - $ref: '#/components/parameters/MiddlewareTenant'
       - $ref: '#/components/parameters/MiddlewareDatabaseRef'
@@ -1447,6 +1457,7 @@ components:
   schemas:
     MiddlewareReadbackBase:
       type: object
+      description: Only attestations matching both stored tenant and database identifiers and completed within 24 hours are used. Legacy unscoped records remain available on operational APIs but never contribute projection proof. An unknown response with no evidence describes no verified binding.
       required: [tenant_id, database_ref, observed_at, status, evidence_refs, checks]
       properties:
         tenant_id:
@@ -1458,6 +1469,7 @@ components:
         observed_at:
           type: string
           format: date-time
+          description: Source completion/end timestamp for the selected evidence; evaluation time only when evidence_refs is empty and status is unknown.
         status:
           enum: [ready, not_ready, unknown]
         evidence_refs:

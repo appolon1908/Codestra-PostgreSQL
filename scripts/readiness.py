@@ -31,6 +31,19 @@ KINDS = {
         "outcome",
     },
 }
+BOUND_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+ATTESTATIONS = {
+    "base-backups": {"encrypted", "offsite_verified"},
+    "recovery-rehearsals": {"application_verified", "rpo_met"},
+}
+
+
+def binding(tenant_id, database_ref):
+    if any(
+        not isinstance(value, str) or not BOUND_REF.fullmatch(value)
+        for value in (tenant_id, database_ref)
+    ):
+        raise ValueError("Invalid evidence binding")
 
 
 def stamp(value):
@@ -48,12 +61,22 @@ def reference(value):
 
 
 def register(kind, record):
+    required = KINDS.get(kind, set()) | {"id", "created_at"}
+    optional = ATTESTATIONS.get(kind, set()) | (
+        {"tenant_id", "database_ref"} if kind in ATTESTATIONS else set()
+    )
     if (
         not isinstance(record, dict)
         or kind not in KINDS
-        or set(record) != KINDS[kind] | {"id", "created_at"}
+        or not required <= set(record)
+        or set(record) - required - optional
     ):
         raise ValueError("Unexpected metadata fields")
+    if kind in ATTESTATIONS and set(record) & optional:
+        binding(record.get("tenant_id"), record.get("database_ref"))
+        for key in ATTESTATIONS[kind] & set(record):
+            if type(record[key]) is not bool:
+                raise ValueError("Invalid evidence attestation")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", record["id"]):
         raise ValueError("Invalid id")
     record = dict(record)
@@ -141,9 +164,17 @@ def register(kind, record):
     path.chmod(0o600)
 
 
-def read(kind, identifier=None):
+def read(kind, identifier=None, *, tenant_id=None, database_ref=None):
     if kind not in KINDS:
         raise ValueError("Unknown metadata kind")
+    scoped = tenant_id is not None or database_ref is not None
+    if scoped:
+        binding(tenant_id, database_ref)
+    where = "kind=?"
+    parameters = [kind]
+    if scoped:
+        where += " AND json_extract(payload, '$.tenant_id')=? AND json_extract(payload, '$.database_ref')=?"
+        parameters += [tenant_id, database_ref]
     with closing(
         sqlite3.connect(
             catalog.location().resolve().as_uri() + "?mode=ro", uri=True, timeout=2
@@ -151,13 +182,13 @@ def read(kind, identifier=None):
     ) as conn:
         if identifier:
             row = conn.execute(
-                "SELECT payload FROM readiness WHERE kind=? AND id=?",
-                (kind, identifier),
+                f"SELECT payload FROM readiness WHERE {where} AND id=?",
+                (*parameters, identifier),
             ).fetchone()
             return json.loads(row[0]) if row else None
         rows = conn.execute(
-            "SELECT payload FROM readiness WHERE kind=? ORDER BY CASE WHEN kind='base-backups' THEN json_extract(payload, '$.completed_at') ELSE created_at END DESC, id DESC LIMIT 101",
-            (kind,),
+            f"SELECT payload FROM readiness WHERE {where} ORDER BY CASE WHEN kind='base-backups' THEN json_extract(payload, '$.completed_at') WHEN kind='recovery-rehearsals' THEN json_extract(payload, '$.ended_at') ELSE created_at END DESC, id DESC LIMIT 101",
+            parameters,
         ).fetchall()
         return {
             "items": [json.loads(row[0]) for row in rows[:100]],
@@ -165,8 +196,8 @@ def read(kind, identifier=None):
         }
 
 
-def evidence(kind):
-    result = read(kind)
+def evidence(kind, *, tenant_id=None, database_ref=None):
+    result = read(kind, tenant_id=tenant_id, database_ref=database_ref)
     result["source"] = "operator_attested"
     result["live_failover_authorized"] = False
     return result
