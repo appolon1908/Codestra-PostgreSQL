@@ -23,12 +23,13 @@ concurrency:
 jobs:
   repository-integrity:
     name: repository-integrity
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
+          persist-credentials: false
       - name: Verify exact SHA and clean checkout
         shell: bash
         run: |
@@ -37,17 +38,52 @@ jobs:
           test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
           test -z "$(git status --porcelain=v1)"
           echo "Validated ${GITHUB_REPOSITORY} @ ${GITHUB_SHA}" >> "${GITHUB_STEP_SUMMARY}"
+      - name: Validate tracked metadata and active deployment identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          scan_status=0
+          git grep -nI -E '^(<<<<<<< |=======($| )|>>>>>>> )' -- . || scan_status=$?
+          if [ "$scan_status" -ne 1 ]; then
+            echo 'Conflict markers found or scan failed'
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess, tomllib
+          paths = subprocess.check_output(["git", "ls-files", "-z"]).decode().split("\0")
+          count = 0
+          for name in filter(None, paths):
+              path = pathlib.Path(name)
+              if path.suffix.lower() == ".json":
+                  json.loads(path.read_text(encoding="utf-8"))
+                  count += 1
+              elif path.suffix.lower() == ".toml":
+                  tomllib.loads(path.read_text(encoding="utf-8"))
+                  count += 1
+          deployment = pathlib.Path(".codestra/deployment-contract.json")
+          if deployment.exists():
+              contract = json.loads(deployment.read_text(encoding="utf-8"))
+              if contract.get("repository", "").casefold() != os.environ["GITHUB_REPOSITORY"].casefold():
+                  raise SystemExit("Active deployment repository identity mismatch")
+              roles = {"Product/domain service", "Provider adapter/connector", "Edge",
+                       "Identity/security", "Automation", "Observability", "Data/platform",
+                       "Client/UI/workstation/device"}
+              if contract.get("role") not in roles:
+                  raise SystemExit("Deployment role is not in the canonical integration contract")
+          print(f"Validated {count} tracked JSON/TOML files; no runtime or promotion certification claimed")
+          PY
   promotion-readiness:
     name: promotion-readiness
     if: github.event_name == 'workflow_dispatch'
     needs: repository-integrity
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.release_sha || github.sha }}
           fetch-depth: 1
+          persist-credentials: false
       - name: Certify release identity without deploying
         shell: bash
         env:
@@ -58,4 +94,4 @@ jobs:
           actual="$(git rev-parse HEAD)"
           test "$actual" = "$EXPECTED_SHA"
           test -z "$(git status --porcelain=v1)"
-          echo "Certified $actual for $TARGET_ENVIRONMENT; deployment performed: no" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Recorded release identity $actual for $TARGET_ENVIRONMENT; readiness, approval and deployment not certified" >> "${GITHUB_STEP_SUMMARY}"
