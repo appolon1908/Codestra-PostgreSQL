@@ -58,9 +58,10 @@ docker compose config --quiet
 Integration tests use a unique disposable Compose project and ephemeral host port;
 they remove only that project's containers and volumes. They test real PostgreSQL,
 backup corruption rejection, restore data, role isolation, exporter and outages.
-The [CI template](docs/ci/checks.yml.example) runs the same checks with committed
-hardening settings. Install it as `.github/workflows/checks.yml` using a GitHub
-credential with workflow scope; the current push credential cannot create workflows.
+The [boundary workflow](.github/workflows/checks.yml) runs lint, formatting, unit
+and contract tests, OpenAPI validation, Compose validation and disposable database
+integration with committed hardening settings. A successful checkout-identity
+check alone does not certify these boundaries or production readiness.
 
 ## Operations and ownership
 
