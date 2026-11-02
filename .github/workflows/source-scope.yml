@@ -60,7 +60,7 @@ jobs:
           # Only this historical fingerprint is ignored; effective-tree detection stays unsuppressed.
           python .github/scripts/history_scan_exception.py "$RUNNER_TEMP/reviewed-status-text.ignore"
           python .github/scripts/check_history_detection.py "$RUNNER_TEMP/gitleaks" "$RUNNER_TEMP/reviewed-status-text.ignore"
-          if ! "$RUNNER_TEMP/gitleaks" git --config "$RUNNER_TEMP/trusted-source-default.toml" --ignore-gitleaks-allow --gitleaks-ignore-path "$RUNNER_TEMP/reviewed-status-text.ignore" --no-banner --redact=100 --exit-code 1 --report-format json --report-path "$RUNNER_TEMP/gitleaks-redacted.json" .; then
+          if ! python .github/scripts/run_strict_scanner.py "$RUNNER_TEMP/gitleaks" git --config "$RUNNER_TEMP/trusted-source-default.toml" --ignore-gitleaks-allow --gitleaks-ignore-path "$RUNNER_TEMP/reviewed-status-text.ignore" --no-banner --redact=100 --exit-code 1 --report-format json --report-path "$RUNNER_TEMP/gitleaks-redacted.json" .; then
             python - <<'PY'
           import json, os
           from pathlib import Path
@@ -70,7 +70,7 @@ jobs:
           PY
             exit 1
           fi
-          "$RUNNER_TEMP/gitleaks" dir --config "$RUNNER_TEMP/trusted-source-default.toml" --ignore-gitleaks-allow --gitleaks-ignore-path "$RUNNER_TEMP/trusted-source-empty.ignore" --no-banner --redact=100 --exit-code 1 .
+          python .github/scripts/run_strict_scanner.py "$RUNNER_TEMP/gitleaks" dir --config "$RUNNER_TEMP/trusted-source-default.toml" --ignore-gitleaks-allow --gitleaks-ignore-path "$RUNNER_TEMP/trusted-source-empty.ignore" --no-banner --redact=100 --exit-code 1 .
       - name: Prove scanner suppression attempts fail closed
         shell: bash
         run: bash .github/scripts/test_secret_scanner.sh
