@@ -46,7 +46,11 @@ jobs:
           curl --fail --silent --show-error --location https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz --output "$archive"
           echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $archive" | sha256sum --check -
           tar -xzf "$archive" -C "$RUNNER_TEMP" gitleaks
-          if ! "$RUNNER_TEMP/gitleaks" git --no-banner --redact=100 --exit-code 1 --report-format json --report-path "$RUNNER_TEMP/gitleaks-redacted.json" .; then
+          # Independently reviewed false positive: immutable static print summary, not a credential.
+          # Only this historical fingerprint is ignored; effective-tree detection stays unsuppressed.
+          python .github/scripts/history_scan_exception.py "$RUNNER_TEMP/reviewed-status-text.ignore"
+          python .github/scripts/check_history_detection.py "$RUNNER_TEMP/gitleaks" "$RUNNER_TEMP/reviewed-status-text.ignore"
+          if ! "$RUNNER_TEMP/gitleaks" git --gitleaks-ignore-path "$RUNNER_TEMP/reviewed-status-text.ignore" --no-banner --redact=100 --exit-code 1 --report-format json --report-path "$RUNNER_TEMP/gitleaks-redacted.json" .; then
             python - <<'PY'
           import json, os
           from pathlib import Path

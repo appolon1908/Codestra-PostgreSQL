@@ -13,6 +13,9 @@ import yaml
 from markdown_it import MarkdownIt
 
 CI_FILES = {
+    '.github/scripts/history_scan_exception.py',
+    '.github/scripts/test_history_scan_exception.py',
+    '.github/scripts/check_history_detection.py',
     '.github/workflows/source-scope.yml',
     '.github/scripts/validate_source_scope.py',
     '.github/scripts/test_source_scope.py',
