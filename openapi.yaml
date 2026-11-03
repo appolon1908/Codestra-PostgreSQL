@@ -1,33 +1,1321 @@
 openapi: 3.1.0
 info:
-  title: Codestra PostgreSQL API
-  version: 0.1.0
-  description: Standalone Codestra service. Cross-system access is mediated by Middleware V3.
+  title: Codestra PostgreSQL Management API
+  version: 1.2.0
+  description: Read-only runtime boundary. Internal use only; cross-system access
+    via Caddy/Kong/Middleware V3. No application records or mutation endpoints. Network
+    isolation is mandatory; this dev API has no application authentication.
 servers:
-  - url: http://localhost
+- url: http://localhost:8080
 paths:
   /healthz:
     get:
       operationId: health
       responses:
-        "200":
-          description: Healthy
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - status
+                additionalProperties: false
+                properties:
+                  status:
+                    const: ok
   /readyz:
     get:
       operationId: ready
       responses:
-        "200":
-          description: Ready
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - status
+                - database
+                additionalProperties: false
+                properties:
+                  status:
+                    enum:
+                    - ready
+                    - unavailable
+                  database:
+                    type: object
+                    required:
+                    - reachable
+                    additionalProperties: false
+                    properties:
+                      reachable:
+                        type: boolean
+                      version_num:
+                        type: integer
+                        minimum: 1
+                      in_recovery:
+                        type: boolean
+                      max_connections:
+                        type: integer
+                        minimum: 1
+                    allOf:
+                    - if:
+                        properties:
+                          reachable:
+                            const: true
+                      then:
+                        required:
+                        - version_num
+                        - in_recovery
+                        - max_connections
+        '503':
+          description: PostgreSQL unreachable or not version 17
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - status
+                - database
+                additionalProperties: false
+                properties:
+                  status:
+                    enum:
+                    - ready
+                    - unavailable
+                  database:
+                    type: object
+                    required:
+                    - reachable
+                    additionalProperties: false
+                    properties:
+                      reachable:
+                        type: boolean
+                      version_num:
+                        type: integer
+                        minimum: 1
+                      in_recovery:
+                        type: boolean
+                      max_connections:
+                        type: integer
+                        minimum: 1
+                    allOf:
+                    - if:
+                        properties:
+                          reachable:
+                            const: true
+                      then:
+                        required:
+                        - version_num
+                        - in_recovery
+                        - max_connections
+  /metrics:
+    get:
+      operationId: metrics
+      responses:
+        '200':
+          description: Success
+          content:
+            text/plain:
+              schema:
+                type: string
   /v1/capabilities:
     get:
       operationId: capabilities
       responses:
-        "200":
-          description: Service capabilities
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - service
+                - api_version
+                - capabilities
+                - mutations
+                - integration_authority
+                additionalProperties: false
+                properties:
+                  service:
+                    const: codestra-postgresql
+                  api_version:
+                    const: '1'
+                  capabilities:
+                    type: array
+                    items:
+                      enum:
+                      - runtime.status
+                      - runtime.health
+                      - runtime.metrics
+                      - backups.catalog
+                      - backups.rehearsals
+                      - runtime.connections
+                      - runtime.pool_isolation
+                      - runtime.security
+                      - runtime.recovery
+                      - runtime.wal
+                      - runtime.capacity
+                      - runtime.maintenance
+                      - operations.ownership
+                      - operations.storage_samples
+                      - operations.base_backups
+                      - operations.recovery_rehearsals
+                  mutations:
+                    const: false
+                  integration_authority:
+                    const: Middleware V3
   /v1/postgresql/status:
     get:
-      operationId: serviceStatus
+      operationId: postgresqlStatus
       responses:
-        "200":
-          description: Service-local status
-components: {}
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - status
+                - database
+                additionalProperties: false
+                properties:
+                  status:
+                    enum:
+                    - ready
+                    - unavailable
+                  database:
+                    type: object
+                    required:
+                    - reachable
+                    additionalProperties: false
+                    properties:
+                      reachable:
+                        type: boolean
+                      version_num:
+                        type: integer
+                        minimum: 1
+                      in_recovery:
+                        type: boolean
+                      max_connections:
+                        type: integer
+                        minimum: 1
+                    allOf:
+                    - if:
+                        properties:
+                          reachable:
+                            const: true
+                      then:
+                        required:
+                        - version_num
+                        - in_recovery
+                        - max_connections
+        '503':
+          description: PostgreSQL unreachable or not version 17
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - status
+                - database
+                additionalProperties: false
+                properties:
+                  status:
+                    enum:
+                    - ready
+                    - unavailable
+                  database:
+                    type: object
+                    required:
+                    - reachable
+                    additionalProperties: false
+                    properties:
+                      reachable:
+                        type: boolean
+                      version_num:
+                        type: integer
+                        minimum: 1
+                      in_recovery:
+                        type: boolean
+                      max_connections:
+                        type: integer
+                        minimum: 1
+                    allOf:
+                    - if:
+                        properties:
+                          reachable:
+                            const: true
+                      then:
+                        required:
+                        - version_num
+                        - in_recovery
+                        - max_connections
+  /health/ready:
+    get:
+      operationId: healthReadyAlias
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - status
+                - database
+                additionalProperties: false
+                properties:
+                  status:
+                    enum:
+                    - ready
+                    - unavailable
+                  database:
+                    type: object
+                    required:
+                    - reachable
+                    additionalProperties: false
+                    properties:
+                      reachable:
+                        type: boolean
+                      version_num:
+                        type: integer
+                        minimum: 1
+                      in_recovery:
+                        type: boolean
+                      max_connections:
+                        type: integer
+                        minimum: 1
+                    allOf:
+                    - if:
+                        properties:
+                          reachable:
+                            const: true
+                      then:
+                        required:
+                        - version_num
+                        - in_recovery
+                        - max_connections
+        '503':
+          description: PostgreSQL unreachable or not version 17
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - status
+                - database
+                additionalProperties: false
+                properties:
+                  status:
+                    enum:
+                    - ready
+                    - unavailable
+                  database:
+                    type: object
+                    required:
+                    - reachable
+                    additionalProperties: false
+                    properties:
+                      reachable:
+                        type: boolean
+                      version_num:
+                        type: integer
+                        minimum: 1
+                      in_recovery:
+                        type: boolean
+                      max_connections:
+                        type: integer
+                        minimum: 1
+                    allOf:
+                    - if:
+                        properties:
+                          reachable:
+                            const: true
+                      then:
+                        required:
+                        - version_num
+                        - in_recovery
+                        - max_connections
+      summary: Readiness alias for Middleware V3
+  /v1/backups:
+    get:
+      operationId: backupsList
+      description: Latest 100 records in descending timestamp/id order. Truncated
+        indicates older records; known IDs remain accessible by detail. Missing catalog
+        returns 503.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                - truncated
+                additionalProperties: false
+                properties:
+                  items:
+                    type: array
+                    maxItems: 100
+                    items: &id003
+                      type: object
+                      required:
+                      - backup_id
+                      - database_ref
+                      - created_at
+                      - digest
+                      - encrypted
+                      - size
+                      - retention_status
+                      additionalProperties: false
+                      properties:
+                        backup_id: &id001
+                          type: string
+                        database_ref: *id001
+                        created_at:
+                          type: string
+                          format: date-time
+                        digest:
+                          type: string
+                          pattern: ^[a-f0-9]{64}$
+                        encrypted: &id002
+                          type: boolean
+                        size: &id006
+                          type: integer
+                          minimum: 0
+                        retention_status:
+                          enum:
+                          - retained
+                          - deletion_pending
+                          - deleted
+                  truncated: *id002
+        '503':
+          description: Unavailable; no sensitive diagnostics returned
+          content:
+            application/json:
+              schema: &id004
+                type: object
+                required:
+                - error
+                additionalProperties: false
+                properties:
+                  error:
+                    enum:
+                    - unavailable
+                    - not_found
+  /v1/backups/{id}:
+    get:
+      operationId: backupsDetail
+      description: Read-only operational metadata.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: *id003
+        '503':
+          description: Unavailable; no sensitive diagnostics returned
+          content:
+            application/json:
+              schema: *id004
+        '404':
+          description: Unknown record
+          content:
+            application/json:
+              schema: *id004
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-zA-Z0-9_-]{1,80}$
+  /v1/rehearsals:
+    get:
+      operationId: rehearsalsList
+      description: Latest 100 records in descending timestamp/id order. Truncated
+        indicates older records; known IDs remain accessible by detail. Missing catalog
+        returns 503.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                - truncated
+                additionalProperties: false
+                properties:
+                  items:
+                    type: array
+                    maxItems: 100
+                    items: &id005
+                      type: object
+                      required:
+                      - report_id
+                      - backup_ref
+                      - isolated_target
+                      - verification_status
+                      - duration_seconds
+                      - digest_match
+                      - created_at
+                      - verification_scope
+                      additionalProperties: false
+                      properties:
+                        report_id: *id001
+                        backup_ref: *id001
+                        isolated_target: *id001
+                        verification_status:
+                          enum:
+                          - running
+                          - passed
+                          - failed
+                        duration_seconds:
+                          type: number
+                          minimum: 0
+                        digest_match:
+                          type:
+                          - boolean
+                          - 'null'
+                        created_at:
+                          type: string
+                          format: date-time
+                        verification_scope:
+                          const: archive_integrity_and_restore_only
+                  truncated: *id002
+        '503':
+          description: Unavailable; no sensitive diagnostics returned
+          content:
+            application/json:
+              schema: *id004
+  /v1/rehearsals/{id}:
+    get:
+      operationId: rehearsalsDetail
+      description: Read-only operational metadata.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: *id005
+        '503':
+          description: Unavailable; no sensitive diagnostics returned
+          content:
+            application/json:
+              schema: *id004
+        '404':
+          description: Unknown record
+          content:
+            application/json:
+              schema: *id004
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-zA-Z0-9_-]{1,80}$
+  /v1/postgresql/connections:
+    get:
+      operationId: connectionBudget
+      description: Fixed aggregate of client backends and WAL senders. Active means
+        state=active. Empty classes omitted; connected includes idle. Reserved budget
+        is PostgreSQL reserved slots, not app pool allocation.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - max_connections
+                - reserved_budget
+                - superuser_reserved
+                - role_reserved
+                - by_role_class
+                additionalProperties: false
+                properties:
+                  max_connections: *id006
+                  reserved_budget: *id006
+                  superuser_reserved: *id006
+                  role_reserved: *id006
+                  by_role_class:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                      - class
+                      - connected
+                      - active
+                      additionalProperties: false
+                      properties:
+                        class:
+                          enum:
+                          - administrator
+                          - monitoring
+                          - replication
+                          - application
+                        connected: *id006
+                        active: *id006
+        '503':
+          description: Unavailable; no sensitive diagnostics returned
+          content:
+            application/json:
+              schema: *id004
+  /v1/postgresql/pool-isolation:
+    get:
+      operationId: poolIsolationReadback
+      description: Fixed, bounded aggregate of client-backend role/database references and pool pressure. No SQL text, credentials, client addresses, session identifiers, or arbitrary query capability.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - max_connections
+                - reserved_budget
+                - usable_connections
+                - connected
+                - active
+                - idle_in_transaction
+                - utilization_ratio
+                - role_database_pairs
+                - roles_spanning_databases
+                - isolation_scope
+                - arbitrary_sql
+                additionalProperties: false
+                properties:
+                  max_connections: *id006
+                  reserved_budget: *id006
+                  usable_connections: *id006
+                  connected: *id006
+                  active: *id006
+                  idle_in_transaction: *id006
+                  utilization_ratio:
+                    type: number
+                    minimum: 0
+                  role_database_pairs:
+                    type: array
+                    maxItems: 64
+                    items:
+                      type: object
+                      required:
+                      - role_ref
+                      - database_ref
+                      - connected
+                      - active
+                      - idle_in_transaction
+                      additionalProperties: false
+                      properties:
+                        role_ref:
+                          type: string
+                          minLength: 1
+                          maxLength: 128
+                        database_ref:
+                          type: string
+                          minLength: 1
+                          maxLength: 128
+                        connected: *id006
+                        active: *id006
+                        idle_in_transaction: *id006
+                  roles_spanning_databases:
+                    type: array
+                    maxItems: 64
+                    items:
+                      type: object
+                      required:
+                      - role_ref
+                      - database_count
+                      additionalProperties: false
+                      properties:
+                        role_ref:
+                          type: string
+                          minLength: 1
+                          maxLength: 128
+                        database_count: *id006
+                  isolation_scope:
+                    const: role_database_refs_only
+                  arbitrary_sql:
+                    const: false
+        '503':
+          description: Unavailable; no sensitive diagnostics returned
+          content:
+            application/json:
+              schema: *id004
+  /v1/postgresql/security:
+    get:
+      operationId: securityReadiness
+      description: SHA-256 fingerprints of parsed on-disk HBA and role attributes/memberships.
+        Not certificate validation or proof the HBA file was reloaded. No raw policy
+        or secrets.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - ssl_enabled
+                - minimum_tls_version
+                - tls_policy_ref
+                - credential_policy_ref
+                - pg_hba_policy_fingerprint
+                - pg_hba_rules_valid
+                - role_policy_fingerprint
+                additionalProperties: false
+                properties:
+                  ssl_enabled: *id002
+                  minimum_tls_version: *id001
+                  tls_policy_ref: *id001
+                  credential_policy_ref: *id001
+                  pg_hba_policy_fingerprint:
+                    type: string
+                    pattern: ^[a-f0-9]{64}$
+                  pg_hba_rules_valid: *id002
+                  role_policy_fingerprint:
+                    type: string
+                    pattern: ^[a-f0-9]{64}$
+        '503':
+          description: Unavailable; no sensitive diagnostics returned
+          content:
+            application/json:
+              schema: *id004
+  /v1/postgresql/recovery:
+    get:
+      operationId: recoveryReadiness
+      description: Configuration presence != successful recovery proof. Lag is maximum
+        sender replay_lag, null when unavailable, not assumed zero. Standby gap measures
+        received versus replayed bytes, not upstream backlog. PITR requires independently
+        verified physical backups and continuous WAL.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - role
+                - in_recovery
+                - wal_level
+                - wal_position
+                - receive_position
+                - replay_paused
+                - replica_count
+                - replication_lag_seconds
+                - receive_replay_gap_bytes
+                - archive_mode_enabled
+                - archive_transport_configured
+                - restore_command_configured
+                - recovery_proven
+                additionalProperties: false
+                properties:
+                  role:
+                    enum:
+                    - primary
+                    - standby
+                  in_recovery: *id002
+                  wal_level: *id001
+                  wal_position: &id007
+                    type:
+                    - string
+                    - 'null'
+                  receive_position: *id007
+                  replay_paused:
+                    type:
+                    - boolean
+                    - 'null'
+                  replica_count: *id006
+                  replication_lag_seconds: &id008
+                    type:
+                    - number
+                    - 'null'
+                    minimum: 0
+                  receive_replay_gap_bytes: *id008
+                  archive_mode_enabled: *id002
+                  archive_transport_configured: *id002
+                  restore_command_configured: *id002
+                  recovery_proven:
+                    const: false
+        '503':
+          description: Unavailable; no sensitive diagnostics returned
+          content:
+            application/json:
+              schema: *id004
+  /v1/ownership:
+    get:
+      operationId: v1_ownership
+      description: Operator-attested metadata only. Bounded to 100 newest records;
+        truncated means more exist. No mutation or authorization implied.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - items
+                - truncated
+                properties:
+                  items:
+                    type: array
+                    maxItems: 100
+                    items: &id010
+                      type: object
+                      additionalProperties: false
+                      required:
+                      - id
+                      - created_at
+                      - database_ref
+                      - schema_ref
+                      - owning_repository
+                      - service_id
+                      properties:
+                        id: &id012
+                          type: string
+                          pattern: ^[A-Za-z0-9_-]{1,80}$
+                        created_at: &id013
+                          type: string
+                          format: date-time
+                        database_ref: &id009
+                          type: string
+                          pattern: ^[A-Za-z0-9_./:-]{1,160}$
+                        schema_ref:
+                          type: string
+                          pattern: ^(\*|[A-Za-z0-9_./:-]{1,160})$
+                        owning_repository: *id009
+                        service_id: *id009
+                  truncated: &id014
+                    type: boolean
+        '503':
+          description: Status or metadata unavailable
+          content:
+            application/json:
+              schema: &id011
+                type: object
+                additionalProperties: false
+                required:
+                - error
+                properties:
+                  error:
+                    enum:
+                    - unavailable
+                    - not_found
+  /v1/ownership/{id}:
+    get:
+      operationId: v1_ownership_detail
+      description: Operator-attested record. A rehearsal outcome never authorizes
+        live failover.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: *id010
+        '503':
+          description: Status or metadata unavailable
+          content:
+            application/json:
+              schema: *id011
+        '404':
+          description: No record
+          content:
+            application/json:
+              schema: *id011
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: *id012
+  /v1/storage-samples:
+    get:
+      operationId: v1_storage_samples
+      description: Operator-attested metadata only. Bounded to 100 newest records;
+        truncated means more exist. No mutation or authorization implied.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - items
+                - truncated
+                properties:
+                  items:
+                    type: array
+                    maxItems: 100
+                    items: &id015
+                      type: object
+                      additionalProperties: false
+                      required:
+                      - id
+                      - created_at
+                      - database_bytes
+                      - disk_free_percent
+                      - scope_ref
+                      properties:
+                        id: *id012
+                        created_at: *id013
+                        database_bytes:
+                          type: integer
+                          minimum: 0
+                        disk_free_percent:
+                          type: number
+                          minimum: 0
+                          maximum: 100
+                        scope_ref: *id009
+                  truncated: *id014
+        '503':
+          description: Status or metadata unavailable
+          content:
+            application/json:
+              schema: *id011
+  /v1/storage-samples/{id}:
+    get:
+      operationId: v1_storage_samples_detail
+      description: Operator-attested record. A rehearsal outcome never authorizes
+        live failover.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: *id015
+        '503':
+          description: Status or metadata unavailable
+          content:
+            application/json:
+              schema: *id011
+        '404':
+          description: No record
+          content:
+            application/json:
+              schema: *id011
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: *id012
+  /v1/base-backups:
+    get:
+      operationId: v1_base_backups
+      description: Operator-attested metadata only. Bounded to 100 newest records;
+        truncated means more exist. No mutation or authorization implied.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - items
+                - truncated
+                properties:
+                  items:
+                    type: array
+                    maxItems: 100
+                    items: &id017
+                      type: object
+                      additionalProperties: false
+                      required:
+                      - id
+                      - created_at
+                      - backup_ref
+                      - completed_at
+                      - verified
+                      - wal_start
+                      - wal_end
+                      properties:
+                        id: *id012
+                        created_at: *id013
+                        backup_ref: *id009
+                        completed_at: *id013
+                        verified: *id014
+                        wal_start: &id016
+                          type:
+                          - string
+                          - 'null'
+                          pattern: ^[0-9A-F]{1,8}/[0-9A-F]{1,8}$
+                        wal_end: *id016
+                  truncated: *id014
+        '503':
+          description: Status or metadata unavailable
+          content:
+            application/json:
+              schema: *id011
+  /v1/base-backups/{id}:
+    get:
+      operationId: v1_base_backups_detail
+      description: Operator-attested record. A rehearsal outcome never authorizes
+        live failover.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: *id017
+        '503':
+          description: Status or metadata unavailable
+          content:
+            application/json:
+              schema: *id011
+        '404':
+          description: No record
+          content:
+            application/json:
+              schema: *id011
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: *id012
+  /v1/recovery-rehearsals:
+    get:
+      operationId: v1_recovery_rehearsals
+      description: Operator-attested metadata only. Bounded to 100 newest records;
+        truncated means more exist. No mutation or authorization implied.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - items
+                - truncated
+                properties:
+                  items:
+                    type: array
+                    maxItems: 100
+                    items: &id019
+                      type: object
+                      additionalProperties: false
+                      required:
+                      - id
+                      - created_at
+                      - scenario
+                      - started_at
+                      - ended_at
+                      - rto_target_seconds
+                      - duration_seconds
+                      - data_integrity
+                      - wal_start
+                      - wal_end
+                      - outcome
+                      - rto_met
+                      - live_failover_authorized
+                      properties:
+                        id: *id012
+                        created_at: *id013
+                        scenario: *id009
+                        started_at: *id013
+                        ended_at: *id013
+                        rto_target_seconds: &id018
+                          type: number
+                          minimum: 0
+                        duration_seconds: *id018
+                        data_integrity:
+                          enum:
+                          - passed
+                          - failed
+                          - not_verified
+                        wal_start: *id016
+                        wal_end: *id016
+                        outcome:
+                          enum:
+                          - success
+                          - failure
+                        rto_met: *id014
+                        live_failover_authorized:
+                          const: false
+                  truncated: *id014
+        '503':
+          description: Status or metadata unavailable
+          content:
+            application/json:
+              schema: *id011
+  /v1/recovery-rehearsals/{id}:
+    get:
+      operationId: v1_recovery_rehearsals_detail
+      description: Operator-attested record. A rehearsal outcome never authorizes
+        live failover.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: *id019
+        '503':
+          description: Status or metadata unavailable
+          content:
+            application/json:
+              schema: *id011
+        '404':
+          description: No record
+          content:
+            application/json:
+              schema: *id011
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: *id012
+  /v1/postgresql/wal:
+    get:
+      operationId: v1_postgresql_wal
+      description: Configuration and archiver statistics do not prove WAL continuity,
+        usable backups or recoverability. Base-backup age uses operator-attested physical
+        backup completion times, excluding logical dump catalog. Evidence may be unavailable.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - archive_mode_enabled
+                - archive_transport_configured
+                - wal_level
+                - restore_command_configured
+                - recovery_target_types_supported
+                - archived_count
+                - failed_count
+                - last_archived_at
+                - last_failed_at
+                - stats_reset
+                - archive_failure_pending
+                - recovery_proven
+                - base_backup_evidence
+                - base_backup_age_seconds
+                - recoverability
+                - last_archived_age_seconds
+                properties:
+                  archive_mode_enabled: *id014
+                  archive_transport_configured: *id014
+                  wal_level: &id021
+                    type: string
+                  restore_command_configured: *id014
+                  recovery_target_types_supported:
+                    type: array
+                    items:
+                      enum:
+                      - time
+                      - lsn
+                      - name
+                      - xid
+                      - immediate
+                  archived_count:
+                    type: integer
+                    minimum: 0
+                  failed_count:
+                    type: integer
+                    minimum: 0
+                  last_archived_at: &id020
+                    type:
+                    - string
+                    - 'null'
+                    format: date-time
+                  last_failed_at: *id020
+                  stats_reset: *id020
+                  archive_failure_pending: *id014
+                  recovery_proven:
+                    const: false
+                  base_backup_evidence:
+                    type: object
+                    additionalProperties: false
+                    required:
+                    - items
+                    - truncated
+                    - available
+                    - source
+                    - live_failover_authorized
+                    properties:
+                      items:
+                        type: array
+                        maxItems: 100
+                        items: *id017
+                      truncated: *id014
+                      available: *id014
+                      source:
+                        const: operator_attested
+                      live_failover_authorized:
+                        const: false
+                  base_backup_age_seconds: &id022
+                    type:
+                    - number
+                    - 'null'
+                    minimum: 0
+                  recoverability:
+                    const: unproven
+                  last_archived_age_seconds:
+                    type:
+                    - number
+                    - 'null'
+                    minimum: 0
+        '503':
+          description: Status or metadata unavailable
+          content:
+            application/json:
+              schema: *id011
+  /v1/postgresql/capacity:
+    get:
+      operationId: v1_postgresql_capacity
+      description: Database bytes aggregate non-template databases. Relation counts/bytes
+        cover only relation_scope (postgres). Disk percentage is the newest operator
+        sample for the scope_ref given, never the management container filesystem.
+        Growth comparisons require matching scope. Unknown is null.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - database_count
+                - database_bytes
+                - relation_scope
+                - table_count
+                - index_count
+                - relation_bytes
+                - growth_samples
+                - disk_free_percent
+                - sample_age_seconds
+                properties:
+                  database_count:
+                    type: integer
+                    minimum: 0
+                  database_bytes: *id018
+                  relation_scope: *id021
+                  table_count:
+                    type: integer
+                    minimum: 0
+                  index_count:
+                    type: integer
+                    minimum: 0
+                  relation_bytes: *id018
+                  growth_samples:
+                    type: object
+                    additionalProperties: false
+                    required:
+                    - items
+                    - truncated
+                    - available
+                    - source
+                    - live_failover_authorized
+                    properties:
+                      items:
+                        type: array
+                        maxItems: 100
+                        items: *id015
+                      truncated: *id014
+                      available: *id014
+                      source:
+                        const: operator_attested
+                      live_failover_authorized:
+                        const: false
+                  disk_free_percent:
+                    type:
+                    - number
+                    - 'null'
+                    minimum: 0
+                    maximum: 100
+                  sample_age_seconds: *id022
+        '503':
+          description: Status or metadata unavailable
+          content:
+            application/json:
+              schema: *id011
+  /v1/postgresql/maintenance:
+    get:
+      operationId: v1_postgresql_maintenance
+      description: Relation health is limited to relation_scope; backlog estimates
+        use global autovacuum thresholds, excluding per-table overrides. XID age and
+        checkpoint counters are cluster-wide. Statistics resets invalidate rate comparisons.
+        No maintenance execution endpoint.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - relation_scope
+                - autovacuum_enabled
+                - dead_tuple_estimate
+                - modified_since_analyze_estimate
+                - vacuum_backlog_estimate
+                - analyze_backlog_estimate
+                - never_vacuumed_tables
+                - never_analyzed_tables
+                - oldest_database_xid_age
+                - freeze_max_age
+                - checkpoints_timed
+                - checkpoints_requested
+                - checkpoint_write_ms
+                - checkpoint_sync_ms
+                - stats_reset
+                properties:
+                  relation_scope: *id021
+                  autovacuum_enabled: *id014
+                  dead_tuple_estimate:
+                    type: integer
+                    minimum: 0
+                  modified_since_analyze_estimate:
+                    type: integer
+                    minimum: 0
+                  vacuum_backlog_estimate:
+                    type: integer
+                    minimum: 0
+                  analyze_backlog_estimate:
+                    type: integer
+                    minimum: 0
+                  never_vacuumed_tables:
+                    type: integer
+                    minimum: 0
+                  never_analyzed_tables:
+                    type: integer
+                    minimum: 0
+                  oldest_database_xid_age:
+                    type: integer
+                    minimum: 0
+                  freeze_max_age:
+                    type: integer
+                    minimum: 0
+                  checkpoints_timed:
+                    type: integer
+                    minimum: 0
+                  checkpoints_requested:
+                    type: integer
+                    minimum: 0
+                  checkpoint_write_ms: *id018
+                  checkpoint_sync_ms: *id018
+                  stats_reset: *id020
+        '503':
+          description: Status or metadata unavailable
+          content:
+            application/json:
+              schema: *id011

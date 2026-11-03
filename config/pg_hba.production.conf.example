@@ -1,0 +1,10 @@
+# Render app names and deployment CIDRs explicitly; first matching rule wins.
+local all postgres peer
+hostnossl all all 0.0.0.0/0 reject
+hostnossl all all ::/0 reject
+hostssl postgres codestra_monitor 10.40.0.0/24 scram-sha-256
+hostssl postgres codestra_exporter 10.40.1.0/24 scram-sha-256
+hostssl app_db app_runtime 10.41.0.0/24 scram-sha-256
+hostssl app_db app_migrator 10.42.0.0/24 scram-sha-256
+host all all 0.0.0.0/0 reject
+host all all ::/0 reject
